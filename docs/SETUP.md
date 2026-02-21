@@ -158,6 +158,7 @@ CLI arguments override environment variables when both are provided.
 | `~/.emblemai/secrets.json` | auth-sdk encrypted plugin secrets |
 | `~/.emblemai/session.json` | Saved browser auth session (auto-managed) |
 | `~/.emblemai/history/{vaultId}.json` | Conversation history (per vault) |
+| `~/.emblemai/x402-favorites.json` | Saved x402 favorite services |
 | `~/.emblemai-stream.log` | Stream log (when enabled) |
 | `~/.emblemai-plugins.json` | Custom plugin definitions |
 

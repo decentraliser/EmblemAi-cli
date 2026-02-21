@@ -92,6 +92,20 @@ The `/auth` menu provides:
 | `/plugin <name> on` | Enable a plugin by name |
 | `/plugin <name> off` | Disable a plugin by name |
 
+### x402 Payments
+
+| Command | Description |
+|---------|-------------|
+| `/x402` | Show x402 plugin status and quick actions |
+
+The x402 plugin provides AI tools (`x402_search`, `x402_agents`, `x402_call`, `x402_stats`, `x402_favorites`) that the AI invokes automatically during conversations. Use natural language to search for and call paid services:
+
+```
+"Search for trending token services on x402"
+"Call https://example.com/api/data using solana"
+"Show x402 ecosystem stats"
+```
+
 ### Secrets
 
 | Command | Description |

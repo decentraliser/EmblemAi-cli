@@ -4,7 +4,92 @@ EmblemAI uses a plugin system to extend AI capabilities with client-side tools. 
 
 ---
 
-## Active Plugin
+## Active Plugins
+
+### x402 -- Pay-Per-Call API Access
+
+**Status**: Loaded by default
+**Description**: Enables agents to discover and pay for 11,000+ x402-gated services across the ecosystem. Handles HTTP 402 payment negotiation, cryptographic signing (EVM + Solana), and on-chain settlement automatically.
+
+Supports both x402 protocol v1 (X-PAYMENT header, used by Coinbase x402 and most early servers) and v2 (PAYMENT-SIGNATURE header, used by strict servers like PULL.md).
+
+#### Supported Payment Networks
+
+| Network | Token | Transfer Method |
+|---------|-------|-----------------|
+| Base (EVM) | USDC | EIP-3009 gasless permit (no gas fees) |
+| Solana | USDC | SPL token transfer |
+
+#### Tools
+
+##### x402_search
+
+Search paid APIs and services via [XGate](https://xgate.run).
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `query` | string | Free text search (e.g. "trending tokens", "swap", "AI agent") |
+| `network` | string | Network filter: base, ethereum, polygon, solana (comma-separated) |
+| `asset` | string | Asset filter (comma-separated) |
+| `limit` | number | Max results (1-50, default 10) |
+
+##### x402_agents
+
+Search AI agents registered on-chain via XGate.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `query` | string | Free text search |
+| `protocols` | string | Protocol filter: A2A, MCP (comma-separated) |
+| `skills` | string | Required skill names (comma-separated) |
+| `limit` | number | Max results (1-50, default 10) |
+
+##### x402_call
+
+Call any x402 payment-gated resource URL with automatic payment.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `url` | string | Yes | Full URL of the x402 resource |
+| `body` | string | No | JSON string of request body / tool parameters |
+| `method` | string | No | HTTP method (default: POST) |
+| `preferredNetwork` | string | No | Preferred payment network: "solana" for SOL USDC, "base" or "evm" for Base USDC |
+| `passAuth` | string | No | Set "true" to pass wallet auth (only works for local Hustle server) |
+| `walletAddress` | string | No | Buyer EVM wallet address for wallet-binding on strict v2 servers |
+| `clientMode` | string | No | Set "agent" for strict headless mode (recommended for PULL.md) |
+
+##### x402_stats
+
+Get x402 ecosystem statistics from XGate (total agents, services, chains).
+
+No parameters required.
+
+##### x402_favorites
+
+Manage favorite x402 services.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `action` | string | Action: list, add, remove, note (default: list) |
+| `url` | string | Service URL (required for add/remove/note) |
+| `note` | string | Note text (for add or note actions) |
+| `name` | string | Display name (for add action) |
+| `tags` | string | Comma-separated tags (for add action) |
+
+#### Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `X402_HUSTLE_URL` | Override Hustle server URL for auth passthrough | `https://agenthustle.ai` |
+
+#### Signing Architecture
+
+The plugin uses `@emblemvault/auth-sdk` for all cryptographic signing -- no private keys are ever held locally. Signing requests are routed through the EmblemVault API to Lit Protocol MPC nodes:
+
+- **EVM**: `auth-sdk.toViemAccount()` provides a viem-compatible account with `signTypedData` for EIP-3009 gasless permits
+- **Solana**: `auth-sdk.toSolanaWeb3Signer()` is bridged to `@solana/kit`'s `TransactionSigner` interface for SPL token transfers
+
+---
 
 ### ElizaOS -- AI Agent Framework
 

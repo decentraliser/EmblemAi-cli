@@ -181,6 +181,7 @@ emblemai --reset
 | `/payment token <T>` | Set payment token |
 | `/payment mode <M>` | Set payment mode |
 | `/secrets` | Manage encrypted plugin secrets |
+| `/x402` | x402 plugin status and quick actions |
 | `/glow on\|off` | Toggle glow markdown rendering |
 | `/log on\|off` | Toggle stream logging |
 | `/reset` | Clear conversation |
@@ -198,13 +199,41 @@ This places the credential files in `~/.emblemai/` and you're ready to go.
 
 ## Plugins
 
-The ElizaOS plugin is loaded by default:
-
-| Plugin | Package | Description |
-|--------|---------|-------------|
-| ElizaOS | `@agenthustle/plugin-masq` | ElizaOS agent framework with MASQ and inverse discovery |
+| Plugin | Status | Description |
+|--------|--------|-------------|
+| x402 | Loaded by default | Pay-per-call access to 11,000+ paid APIs and AI services via the [x402 protocol](https://x402.org) |
+| ElizaOS | Loaded by default | ElizaOS agent framework with MASQ and inverse discovery |
 
 Additional plugins exist but are currently disabled. See [docs/PLUGINS.md](docs/PLUGINS.md) for details.
+
+### x402 Payment Plugin
+
+The x402 plugin lets your agent discover and pay for services across the x402 ecosystem. It handles 402 payment negotiation, cryptographic signing, and on-chain settlement automatically.
+
+**Supported networks**: Base (EVM/USDC via EIP-3009 gasless permits), Solana (USDC via SPL transfers)
+
+```bash
+# Search for paid services
+emblemai --agent -m "Use x402_search to find trending token services"
+
+# Call a paid API with automatic payment
+emblemai --agent -m "Use x402_call to call https://agenthustle.ai/api/tools/execute/unified/currentUnixTimestamp"
+
+# Prefer a specific payment network
+emblemai --agent -m "Use x402_call to call https://agenthustle.ai/api/tools/execute/unified/birdeyeTrendingTokens with preferredNetwork solana"
+```
+
+The plugin provides 5 tools:
+
+| Tool | Description |
+|------|-------------|
+| `x402_search` | Search paid APIs and services via [XGate](https://xgate.run) |
+| `x402_agents` | Search on-chain AI agents by capability or protocol |
+| `x402_call` | Call any x402-gated URL with automatic payment |
+| `x402_stats` | Get x402 ecosystem statistics |
+| `x402_favorites` | Save and manage favorite services |
+
+See [docs/PLUGINS.md](docs/PLUGINS.md) for full parameter reference.
 
 ## Optional: Glow (Markdown Rendering)
 
