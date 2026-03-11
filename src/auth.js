@@ -254,31 +254,36 @@ export function promptPassword(question) {
  * 5. Interactive prompt
  *
  * @param {{ password?: string, isAgentMode?: boolean }} args
- * @returns {Promise<string>} The resolved password
+ * @returns {Promise<{ password: string, source: string, generated?: boolean, stored?: boolean }>} The resolved password + source metadata
  */
 export async function getPassword(args = {}) {
   // 1. Explicit argument — store encrypted
   if (args.password) {
     setCredential('EMBLEM_PASSWORD', args.password);
-    return args.password;
+    return { password: args.password, source: 'arg' };
   }
 
   // 2. Environment variable
-  if (process.env.EMBLEM_PASSWORD) return process.env.EMBLEM_PASSWORD;
+  if (process.env.EMBLEM_PASSWORD) {
+    return { password: process.env.EMBLEM_PASSWORD, source: 'env' };
+  }
 
   // 3. Encrypted credential file
   const stored = getCredential('EMBLEM_PASSWORD');
-  if (stored) return stored;
+  if (stored) {
+    return { password: stored, source: 'stored', stored: true };
+  }
 
   // 4. Agent mode — auto-generate password
   if (args.isAgentMode) {
     const generated = crypto.randomBytes(32).toString('base64url');
     setCredential('EMBLEM_PASSWORD', generated);
-    return generated;
+    return { password: generated, source: 'generated', generated: true };
   }
 
   // 5. Interactive prompt
-  return promptPassword('Enter your EmblemVault password (min 16 chars): ');
+  const prompted = await promptPassword('Enter your EmblemVault password (min 16 chars): ');
+  return { password: prompted, source: 'prompt' };
 }
 
 // ── Authentication ───────────────────────────────────────────────────────────
@@ -515,7 +520,7 @@ export async function authMenu(authSdk, promptFn) {
   console.log('  5. EVM Address');
   console.log('  6. Solana Address');
   console.log('  7. BTC Addresses');
-  console.log('  8. Backup Agent Auth');
+  console.log('  8. Backup Agent Auth (recommended after password auth setup)');
   console.log('  9. Logout');
   console.log('  0. Back');
   console.log('');

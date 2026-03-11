@@ -49,7 +49,14 @@ function cmdHelp(ctx) {
     return `  ${chalk.cyan(padded)} ${chalk.dim(c.desc)}`;
   });
   const header = chalk.bold.white('Available Commands');
-  const text = `\n${header}\n${chalk.dim('─'.repeat(maxCmd + 30))}\n${lines.join('\n')}\n`;
+  const authNotes = [
+    '',
+    chalk.bold.white('Auth Notes'),
+    `  ${chalk.dim('- Interactive use: browser auth is recommended.')}`,
+    `  ${chalk.dim('- Agent mode uses password auth and can create a repeatable wallet identity.')}`,
+    `  ${chalk.dim('- If password auth created a new wallet for you, back it up via /auth -> Backup Agent Auth.')}`,
+  ].join('\n');
+  const text = `\n${header}\n${chalk.dim('─'.repeat(maxCmd + 30))}\n${lines.join('\n')}\n${authNotes}\n`;
   ctx.appendMessage('system', text);
   return { handled: true };
 }
