@@ -58,6 +58,9 @@ Agent mode always uses password authentication:
 
 - Password must be 16+ characters
 - No recovery if lost (treat it like a private key)
+- If the CLI auto-generates a password for you, back it up soon after wallet creation
+
+**Important:** password auth is one of the main ways agents and operators get repeatable wallet access without browser auth. But the password is effectively wallet-critical material. If you lose local credentials and do not have a backup, you may lose access to that wallet.
 
 ## Operating Modes
 
@@ -197,13 +200,19 @@ emblemai --reset
 
 ## Auth Backup and Restore
 
-The `/auth` menu includes a **Backup Agent Auth** option that exports your credentials to a single JSON file. To restore on another machine:
+The `/auth` menu includes a **Backup Agent Auth** option that exports your credentials to a single JSON file. If you are using password auth, especially an auto-generated password, this backup flow is the main recovery path you should know about.
 
 ```bash
 emblemai --restore-auth ~/emblemai-auth-backup.json
 ```
 
 This places the credential files in `~/.emblemai/` and you're ready to go.
+
+Recommended operator habit:
+1. create or authenticate the wallet
+2. confirm the wallet addresses look right
+3. run `/auth` → **Backup Agent Auth**
+4. store the backup somewhere secure and offline-friendly
 
 ## Plugins
 
