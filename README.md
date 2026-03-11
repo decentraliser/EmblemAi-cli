@@ -95,6 +95,16 @@ ADDRESSES=$(emblemai -a -m "List my addresses as JSON")
 
 Agent mode always uses password auth (never browser auth), retains conversation history between calls, and supports the full Hustle AI toolset including trading, transfers, portfolio queries, and cross-chain operations.
 
+#### Multiple agents using the same CLI instance
+Session data is stored in `$HOME/.emblemai/` and is shared across all invocations of the CLI.
+If you need to run multiple agents with different wallets on the same machine, you can use a different home directory for each agent instance:
+
+```bash
+# Agent 1 with its own wallet
+HOME=/home/user/agent1 emblemai --agent -m "What are my wallet addresses?"
+HOME=/home/user/agent2 emblemai --agent -m "What are my wallet addresses?"
+```
+
 #### Integrating with Agent Frameworks
 
 Any system that can shell out to a CLI can give its agents a wallet:
