@@ -184,8 +184,8 @@ Missing packages are silently skipped.
 
 ### Secrets
 
-Plugins can declare secrets (e.g., API keys) that are encrypted with the user's vault key and stored in `~/.emblemai/secrets.json`. Secrets are lazily decrypted on first tool use. Use `/secrets` to manage them interactively.
+Plugins can declare secrets (e.g., API keys) that are encrypted with the user's vault key and stored in `~/.emblemai/profiles/<profile>/secrets.json`. Secrets are lazily decrypted on first tool use. Use `/secrets` to manage them interactively.
 
 ### Custom Plugins
 
-User-created plugins are stored in `~/.emblemai-plugins.json` and loaded at startup. Custom plugins use serialized executor code that is compiled at load time.
+User-created plugins are stored in `~/.emblemai/profiles/<profile>/plugins.json` and loaded at startup. Custom plugins use serialized executor code that is compiled at load time.

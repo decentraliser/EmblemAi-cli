@@ -24,12 +24,54 @@ npm run typecheck
 # Agent mode -- give your AI agent a wallet (auto-generates credentials on first run)
 emblemai --agent -m "What are my wallet addresses?"
 
+# Agent mode with an explicit named profile
+emblemai --profile treasury --agent -m "Show my balances across all chains"
+
 # Agent mode with a specific wallet identity
 emblemai --agent -p "my-agent-password-here" -m "Show my balances across all chains"
 
 # Interactive mode -- opens browser for human authentication
 emblemai
+
+# Manage profiles
+emblemai profile list
+emblemai profile create treasury
+emblemai profile use treasury
 ```
+
+## Profiles
+
+EmblemAI now supports multiple named wallet profiles per installation. Each profile gets its own:
+
+- encrypted password (`.env` + `.env.keys`)
+- browser auth session (`session.json`)
+- plugin secrets (`secrets.json`)
+- custom plugin state (`plugins.json`)
+- x402 favorites (`x402-favorites.json`)
+- chat history (`history/`)
+
+Storage layout:
+
+```text
+~/.emblemai/
+  active-profile
+  profiles/
+    default/
+      metadata.json
+      session.json
+      .env
+      .env.keys
+      secrets.json
+      plugins.json
+      x402-favorites.json
+      history/
+    treasury/
+      ...
+```
+
+Use `--profile <name>` to select a profile for a single invocation, or `emblemai profile use <name>` to switch the default active profile for future runs.
+
+Existing single-wallet installs are migrated automatically into `profiles/default`.
 
 ## Authentication
 
@@ -39,10 +81,11 @@ EmblemAI v3 supports two authentication methods:
 
 When you run `emblemai` without `-p`, the CLI:
 
-1. Checks for a saved session in `~/.emblemai/session.json`
-2. If no valid session, opens your browser to authenticate via the EmblemVault auth modal
-3. Captures the JWT session and saves it locally
-4. On subsequent runs, restores the saved session automatically (no login needed until it expires)
+1. Resolves the active profile from `--profile`, `~/.emblemai/active-profile`, or `default`
+2. Checks for a saved session in `~/.emblemai/profiles/<profile>/session.json`
+3. If no valid session, opens your browser to authenticate via the EmblemVault auth modal
+4. Captures the JWT session and saves it locally inside that profile
+5. On subsequent runs, restores the saved session automatically
 
 If the browser fails to open, the URL is printed for manual copy-paste. If authentication times out (5 minutes), falls back to password prompt.
 
@@ -51,7 +94,7 @@ If the browser fails to open, the URL is printed for manual copy-paste. If authe
 Agent mode always uses password authentication:
 
 - Auto-generates a secure password on first run if none provided
-- Password is stored encrypted via dotenvx in `~/.emblemai/.env`
+- Password is stored encrypted via dotenvx in `~/.emblemai/profiles/<profile>/.env`
 - Use `-p` flag to provide a specific password
 
 **Login and signup are the same action.** The first use of a password creates a vault; subsequent uses return the same vault. Different passwords produce different wallets.
@@ -70,6 +113,7 @@ Readline-based interactive mode with streaming AI responses, glow markdown rende
 
 ```bash
 emblemai              # Browser auth (recommended)
+emblemai --profile treasury
 emblemai -p "your-password"  # Password auth
 ```
 
@@ -77,11 +121,16 @@ emblemai -p "your-password"  # Password auth
 
 Agent mode is the primary integration point for AI agents, automation scripts, and agent frameworks like OpenClaw. It sends a single message, prints the response to stdout, and exits -- designed for programmatic use where another system is orchestrating the agent.
 
+If more than one profile exists in `$HOME/.emblemai`, every agent-mode invocation must include `--profile <name>`. Agent mode never guesses which wallet identity to use.
+
 **Zero-config setup**: On first run without a password, agent mode auto-generates a secure password and stores it encrypted. The agent gets a wallet immediately with no human intervention.
 
 ```bash
 # First run -- auto-generates password, creates wallet, answers query
 emblemai --agent -m "What are my wallet addresses?"
+
+# First run in a non-default profile
+emblemai --profile treasury --agent -m "Show my balances"
 
 # Explicit password -- use when you need a specific wallet identity
 emblemai --agent -p "your-password" -m "Show my balances"
@@ -115,16 +164,27 @@ emblemai --agent -m "Swap 100 USDC to ETH on Base"
 emblemai --agent -m "What tokens do I hold across all chains?"
 ```
 
-Each password produces a unique, deterministic wallet. To give multiple agents separate wallets, use different passwords:
+Each password produces a unique, deterministic wallet. To give multiple agents separate wallets, use different passwords or different profiles:
 
 ```bash
 emblemai --agent -p "agent-alice-wallet-001" -m "My addresses?"
 emblemai --agent -p "agent-bob-wallet-002" -m "My addresses?"
+emblemai --profile treasury --agent -m "My addresses?"
+emblemai --profile operations --agent -m "My addresses?"
 ```
+
+If multiple profiles exist, all agent-mode CLI invocations require `--profile <name>` so the CLI never guesses which wallet identity to use.
 
 ### PAYG Billing
 
 Use `--payg` to configure pay-as-you-go billing. This is a one-time setup -- the setting persists on the server, so you only need to run it once (or when you want to change the token or turn it off). Do not pass `--payg` on every request.
+
+PAYG has two server-side modes:
+
+- `pay_per_request` — every paid request is settled immediately using the selected payment token.
+- `debt_accumulation` — requests can accrue debt until the configured debt ceiling is reached; once the ceiling is hit, the server may block new requests until debt is reduced.
+
+The payment token is the asset used when PAYG settles charges. For example, if the token is `SOL`, paid requests settle in `SOL`; if the token is `ETH`, they settle in `ETH` (subject to what the server supports).
 
 ```bash
 # Enable PAYG with SOL as payment token (run once)
@@ -154,6 +214,7 @@ emblemai --reset
 | Flag | Description |
 |------|-------------|
 | `-p`, `--password <pw>` | EmblemVault password (min 16 chars) -- skips browser auth |
+| `--profile <name>` | Select a named wallet profile for this invocation. Required in agent mode when more than one profile exists. |
 | `-m`, `--message <msg>` | Message to send (agent mode) |
 | `-a`, `--agent` | Agent mode (single message, exit) |
 | `--payg on [TOKEN]` | One-time PAYG setup -- enable billing, optionally set payment token (SOL, ETH, etc.) |
@@ -183,6 +244,8 @@ emblemai --reset
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all commands |
+| `/profile` | List profiles |
+| `/profile create\|use\|inspect\|delete` | Manage wallet profiles |
 | `/plugins` | List all plugins with status |
 | `/plugin <name> on\|off` | Toggle a plugin |
 | `/tools` | List available tools |
@@ -196,10 +259,10 @@ emblemai --reset
 | `/stream on\|off` | Toggle streaming |
 | `/debug on\|off` | Toggle debug mode |
 | `/history on\|off` | Toggle history retention |
-| `/payment` | PAYG billing status |
-| `/payment enable\|disable` | Toggle PAYG billing |
-| `/payment token <T>` | Set payment token |
-| `/payment mode <M>` | Set payment mode |
+| `/payment` | PAYG status, token usage, and mode guide |
+| `/payment enable\|disable` | Turn PAYG charging on or off |
+| `/payment token <T>` | Set the token used to settle PAYG charges |
+| `/payment mode <M>` | Set mode: `pay_per_request` or `debt_accumulation` |
 | `/secrets` | Manage encrypted plugin secrets |
 | `/x402` | x402 plugin status and quick actions |
 | `/glow on\|off` | Toggle glow markdown rendering |
@@ -215,7 +278,33 @@ The `/auth` menu includes a **Backup Agent Auth** option that exports your crede
 emblemai --restore-auth ~/emblemai-auth-backup.json
 ```
 
-This places the credential files in `~/.emblemai/` and you're ready to go.
+This restores the credential files into the resolved active profile. If you pass `--profile <name>`, restore writes into that profile and creates it first when needed.
+
+## Local Development
+
+```bash
+git clone git@github.com:EmblemCompany/EmblemAi-cli.git
+cd EmblemAi-cli
+npm install
+
+# Run directly (no build step)
+node emblemai.js --help
+
+# Profile management
+node emblemai.js profile list
+node emblemai.js profile create treasury
+node emblemai.js profile use treasury
+
+# Run tests
+npm test
+npm run test:coverage
+
+# Interactive mode
+node emblemai.js
+
+# Agent mode
+node emblemai.js --profile treasury --agent -m "Show balances"
+```
 
 Recommended operator habit:
 1. create or authenticate the wallet

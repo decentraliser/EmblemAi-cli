@@ -8,7 +8,9 @@ All commands are prefixed with `/`. Type them in the input bar and press Enter.
 
 | Command | Description |
 |---------|-------------|
-| `/help` | Show all available commands and key auth guidance |
+| `/help` | Show all available commands |
+| `/profile` | List profiles and show the active wallet identity |
+| `/profile create\|use\|inspect\|delete` | Manage wallet profiles |
 | `/settings` | Show current configuration (vault ID, model, streaming, debug, tools) |
 | `/exit` | Exit the CLI (also: `/quit`) |
 
@@ -78,11 +80,18 @@ The `/auth` menu provides:
 
 | Command | Description |
 |---------|-------------|
-| `/payment` | Show PAYG billing status (enabled, mode, debt, tokens) |
+| `/payment` | Show PAYG billing status, debt, token usage, and a mode guide |
 | `/payment enable` | Enable pay-as-you-go billing |
 | `/payment disable` | Disable pay-as-you-go billing |
-| `/payment token <TOKEN>` | Set payment token (SOL, ETH, HUSTLE, etc.) |
-| `/payment mode <MODE>` | Set payment mode: `pay_per_request` or `debt_accumulation` |
+| `/payment token <TOKEN>` | Set the token used to settle PAYG charges (SOL, ETH, HUSTLE, etc.) |
+| `/payment mode <MODE>` | Set mode: `pay_per_request` (charge each request immediately) or `debt_accumulation` (let debt build until the ceiling is reached) |
+
+`/payment` now explains both modes inline:
+
+- `pay_per_request` settles each paid request immediately using the selected token.
+- `debt_accumulation` lets requests accrue debt until the server-side debt ceiling is reached, after which the server may block new paid requests.
+
+The selected payment token is the asset used when PAYG actually settles charges.
 
 ### Plugin Management
 
@@ -112,7 +121,7 @@ The x402 plugin provides AI tools (`x402_search`, `x402_agents`, `x402_call`, `x
 |---------|-------------|
 | `/secrets` | Manage encrypted plugin secrets (interactive menu) |
 
-Secrets are encrypted with your vault key and stored in `~/.emblemai/secrets.json`. Plugins are hot-reloaded after setting a secret (no restart needed).
+Secrets are encrypted with your vault key and stored in `~/.emblemai/profiles/<profile>/secrets.json`. Plugins are hot-reloaded after setting a secret (no restart needed).
 
 ### Markdown Rendering
 

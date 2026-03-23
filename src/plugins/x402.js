@@ -26,12 +26,14 @@
  */
 
 import fs from 'fs';
-import path from 'path';
-import os from 'os';
+import { ensureProfileDir, getProfilePaths } from '../profile.js';
 
 const XGATE_BASE = 'https://api.xgate.run';
 const DEFAULT_HUSTLE_URL = 'https://agenthustle.ai';
-const FAVORITES_FILE = path.join(os.homedir(), '.emblemai', 'x402-favorites.json');
+
+function getFavoritesFile() {
+  return getProfilePaths().x402Favorites;
+}
 
 /**
  * @typedef {Record<string, unknown> & { params?: Record<string, unknown>, emblemJwt?: string }} CallBody
@@ -66,17 +68,17 @@ function parseCallBody(value) {
  */
 function loadFavorites() {
   try {
-    if (fs.existsSync(FAVORITES_FILE)) {
-      return JSON.parse(fs.readFileSync(FAVORITES_FILE, 'utf8'));
+    const favoritesFile = getFavoritesFile();
+    if (fs.existsSync(favoritesFile)) {
+      return JSON.parse(fs.readFileSync(favoritesFile, 'utf8'));
     }
   } catch {}
   return {};
 }
 
 function saveFavorites(favs) {
-  const dir = path.dirname(FAVORITES_FILE);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(FAVORITES_FILE, JSON.stringify(favs, null, 2));
+  ensureProfileDir();
+  fs.writeFileSync(getFavoritesFile(), JSON.stringify(favs, null, 2));
 }
 
 export function createX402Plugin(config = {}) {

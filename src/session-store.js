@@ -1,27 +1,25 @@
 /**
  * Session Store for EmblemAI CLI
  *
- * Handles persistent storage of auth sessions to ~/.emblemai/session.json
- * with secure file permissions. Ported from hustle-v5/src/auth/session-store.ts.
+ * Handles persistent storage of auth sessions to the active profile's
+ * session.json with secure file permissions.
  */
 
 import fs from 'fs';
-import path from 'path';
-import os from 'os';
+import { ensureProfileDir, getProfilePaths } from './profile.js';
 
-const EMBLEMAI_DIR = path.join(os.homedir(), '.emblemai');
-const SESSION_FILE = path.join(EMBLEMAI_DIR, 'session.json');
+function getSessionFile() {
+  return getProfilePaths().session;
+}
 
 // Token refresh buffer (refresh 5 minutes before expiry)
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 /**
- * Ensure the .emblemai directory exists with secure permissions
+ * Ensure the active profile directory exists with secure permissions.
  */
 function ensureDir() {
-  if (!fs.existsSync(EMBLEMAI_DIR)) {
-    fs.mkdirSync(EMBLEMAI_DIR, { recursive: true, mode: 0o700 });
-  }
+  ensureProfileDir();
 }
 
 /**
@@ -36,7 +34,7 @@ export function saveSession(session) {
     storedAt: Date.now(),
   };
 
-  fs.writeFileSync(SESSION_FILE, JSON.stringify(stored, null, 2), { mode: 0o600 });
+  fs.writeFileSync(getSessionFile(), JSON.stringify(stored, null, 2), { mode: 0o600 });
 }
 
 /**
@@ -46,9 +44,10 @@ export function saveSession(session) {
  */
 export function loadSession() {
   try {
-    if (!fs.existsSync(SESSION_FILE)) return null;
+    const sessionFile = getSessionFile();
+    if (!fs.existsSync(sessionFile)) return null;
 
-    const content = fs.readFileSync(SESSION_FILE, 'utf-8');
+    const content = fs.readFileSync(sessionFile, 'utf-8');
     const stored = JSON.parse(content);
 
     if (!stored?.session?.authToken || !stored?.session?.user) {
@@ -66,8 +65,9 @@ export function loadSession() {
  */
 export function clearSession() {
   try {
-    if (fs.existsSync(SESSION_FILE)) {
-      fs.unlinkSync(SESSION_FILE);
+    const sessionFile = getSessionFile();
+    if (fs.existsSync(sessionFile)) {
+      fs.unlinkSync(sessionFile);
     }
   } catch {
     // Ignore errors when clearing

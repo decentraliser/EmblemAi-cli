@@ -14,34 +14,25 @@ import { execFile } from 'child_process';
 import dotenvx from '@dotenvx/dotenvx';
 import { saveSession, loadSession, clearSession, isSessionExpired } from './session-store.js';
 import { startAuthServer } from './auth-server.js';
+import { ensureProfileDir, getLegacyFlatPaths, getProfilePaths } from './profile.js';
 
 // ── Paths ────────────────────────────────────────────────────────────────────
 
-const EMBLEMAI_DIR = path.join(os.homedir(), '.emblemai');
-const ENV_PATH = path.join(EMBLEMAI_DIR, '.env');
-const KEYS_PATH = path.join(EMBLEMAI_DIR, '.env.keys');
-const SECRETS_PATH = path.join(EMBLEMAI_DIR, 'secrets.json');
 const LEGACY_CRED_FILE = path.join(os.homedir(), '.emblem-vault');
 
-// ── dotenvx Credential Storage ───────────────────────────────────────────────
+function getPaths() {
+  return getProfilePaths();
+}
 
-/**
- * Read + decrypt a value from ~/.emblemai/.env using dotenvx.
- * Returns null if the file doesn't exist or the key isn't found.
- *
- * @param {string} key - Environment variable name (e.g. 'EMBLEM_PASSWORD')
- * @returns {string | null}
- */
-export function getCredential(key) {
-  if (!fs.existsSync(ENV_PATH)) return null;
+function readCredentialAtPath(filePath, keysPath, key) {
+  if (!fs.existsSync(filePath)) return null;
 
   try {
-    const envContent = fs.readFileSync(ENV_PATH, 'utf8');
+    const envContent = fs.readFileSync(filePath, 'utf8');
 
-    // Get private key for decryption
     let privateKey = null;
-    if (fs.existsSync(KEYS_PATH)) {
-      const keysContent = fs.readFileSync(KEYS_PATH, 'utf8');
+    if (fs.existsSync(keysPath)) {
+      const keysContent = fs.readFileSync(keysPath, 'utf8');
       const match = keysContent.match(/DOTENV_PRIVATE_KEY\s*=\s*"?([^"\s]+)"?/);
       if (match) privateKey = match[1];
     }
@@ -56,45 +47,29 @@ export function getCredential(key) {
   }
 }
 
-/**
- * Encrypt + write a value to ~/.emblemai/.env via dotenvx.
- * Auto-creates the keypair on first call.
- *
- * @param {string} key - Environment variable name
- * @param {string} value - Value to encrypt and store
- */
-export function setCredential(key, value) {
-  fs.mkdirSync(EMBLEMAI_DIR, { recursive: true });
-  if (!fs.existsSync(ENV_PATH)) {
-    fs.writeFileSync(ENV_PATH, '', 'utf8');
+function setCredentialAtPath(filePath, keysPath, key, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  if (!fs.existsSync(filePath)) {
+    fs.writeFileSync(filePath, '', 'utf8');
   }
 
-  // Suppress dotenvx stdout noise (banner, hints, etc.)
   const origWrite = process.stdout.write.bind(process.stdout);
   process.stdout.write = () => true;
   try {
-    dotenvx.set(key, value, { path: ENV_PATH });
+    dotenvx.set(key, value, { path: filePath });
   } finally {
     process.stdout.write = origWrite;
   }
 
-  // Secure the keys file (contains the private decryption key)
-  if (fs.existsSync(KEYS_PATH)) {
-    fs.chmodSync(KEYS_PATH, 0o600);
+  if (fs.existsSync(keysPath)) {
+    fs.chmodSync(keysPath, 0o600);
   }
 }
 
-// ── Plugin Secrets (auth-sdk encrypted JSON) ─────────────────────────────────
-
-/**
- * Read plugin secrets from ~/.emblemai/secrets.json.
- *
- * @returns {Record<string, { ciphertext: string, dataToEncryptHash: string }>}
- */
-export function readPluginSecrets() {
+function readPluginSecretsAtPath(filePath) {
   try {
-    if (!fs.existsSync(SECRETS_PATH)) return {};
-    const raw = fs.readFileSync(SECRETS_PATH, 'utf8').trim();
+    if (!fs.existsSync(filePath)) return {};
+    const raw = fs.readFileSync(filePath, 'utf8').trim();
     if (!raw) return {};
     return JSON.parse(raw);
   } catch {
@@ -102,15 +77,58 @@ export function readPluginSecrets() {
   }
 }
 
+function writePluginSecretsAtPath(filePath, secrets) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(filePath, JSON.stringify(secrets, null, 2) + '\n', 'utf8');
+  fs.chmodSync(filePath, 0o600);
+}
+
+// ── dotenvx Credential Storage ───────────────────────────────────────────────
+
 /**
- * Write plugin secrets to ~/.emblemai/secrets.json.
+ * Read + decrypt a value from the active profile's .env using dotenvx.
+ * Returns null if the file doesn't exist or the key isn't found.
+ *
+ * @param {string} key - Environment variable name (e.g. 'EMBLEM_PASSWORD')
+ * @returns {string | null}
+ */
+export function getCredential(key) {
+  const paths = getPaths();
+  return readCredentialAtPath(paths.env, paths.envKeys, key);
+}
+
+/**
+ * Encrypt + write a value to the active profile's .env via dotenvx.
+ * Auto-creates the keypair on first call.
+ *
+ * @param {string} key - Environment variable name
+ * @param {string} value - Value to encrypt and store
+ */
+export function setCredential(key, value) {
+  ensureProfileDir();
+  const paths = getPaths();
+  setCredentialAtPath(paths.env, paths.envKeys, key, value);
+}
+
+// ── Plugin Secrets (auth-sdk encrypted JSON) ─────────────────────────────────
+
+/**
+ * Read plugin secrets from the active profile's secrets.json.
+ *
+ * @returns {Record<string, { ciphertext: string, dataToEncryptHash: string }>}
+ */
+export function readPluginSecrets() {
+  return readPluginSecretsAtPath(getPaths().secrets);
+}
+
+/**
+ * Write plugin secrets to the active profile's secrets.json.
  *
  * @param {Record<string, { ciphertext: string, dataToEncryptHash: string }> | {}} secrets
  */
 export function writePluginSecrets(secrets) {
-  fs.mkdirSync(EMBLEMAI_DIR, { recursive: true });
-  fs.writeFileSync(SECRETS_PATH, JSON.stringify(secrets, null, 2) + '\n', 'utf8');
-  fs.chmodSync(SECRETS_PATH, 0o600);
+  ensureProfileDir();
+  writePluginSecretsAtPath(getPaths().secrets, secrets);
 }
 
 // ── Compatibility Wrappers ───────────────────────────────────────────────────
@@ -147,12 +165,13 @@ export function writeCredentialFile(data) {
 
 /**
  * Migrate credentials from legacy ~/.emblem-vault to new dotenvx format.
- * Only runs if the old file exists AND ~/.emblemai/.env does NOT exist.
+ * Only runs if the old file exists AND legacy flat ~/.emblemai/.env does NOT exist.
  * Backs up old file to ~/.emblem-vault.bak.
  */
 export function migrateLegacyCredentials() {
+  const legacyPaths = getLegacyFlatPaths();
   if (!fs.existsSync(LEGACY_CRED_FILE)) return;
-  if (fs.existsSync(ENV_PATH)) return; // already migrated
+  if (fs.existsSync(legacyPaths.env)) return; // already migrated
 
   try {
     const raw = fs.readFileSync(LEGACY_CRED_FILE, 'utf8').trim();
@@ -174,10 +193,10 @@ export function migrateLegacyCredentials() {
     }
 
     if (password) {
-      setCredential('EMBLEM_PASSWORD', password);
+      setCredentialAtPath(legacyPaths.env, legacyPaths.envKeys, 'EMBLEM_PASSWORD', password);
     }
     if (Object.keys(secrets).length > 0) {
-      writePluginSecrets(secrets);
+      writePluginSecretsAtPath(legacyPaths.secrets, secrets);
     }
 
     // Backup old file (never deleted)
@@ -782,26 +801,28 @@ async function _getBtcAddresses(authSdk) {
 }
 
 async function _backupAgentAuth(promptFn) {
+  const paths = getPaths();
+
   console.log('\n========================================');
   console.log('        BACKUP AGENT AUTH');
   console.log('========================================');
   console.log('');
 
   // Check that both files exist
-  if (!fs.existsSync(ENV_PATH)) {
+  if (!fs.existsSync(paths.env)) {
     console.log('  No agent credentials found (.env missing).');
     console.log('  Agent auth is created on first agent-mode run.');
     return;
   }
-  if (!fs.existsSync(KEYS_PATH)) {
+  if (!fs.existsSync(paths.envKeys)) {
     console.log('  No encryption keys found (.env.keys missing).');
     console.log('  Cannot backup without the decryption key.');
     return;
   }
 
   // Read both files
-  const envContent = fs.readFileSync(ENV_PATH, 'utf8');
-  const keysContent = fs.readFileSync(KEYS_PATH, 'utf8');
+  const envContent = fs.readFileSync(paths.env, 'utf8');
+  const keysContent = fs.readFileSync(paths.envKeys, 'utf8');
 
   // Default backup path
   const defaultPath = path.join(os.homedir(), 'emblemai-auth-backup.json');
@@ -817,8 +838,8 @@ async function _backupAgentAuth(promptFn) {
     };
 
     // Also include secrets if they exist
-    if (fs.existsSync(SECRETS_PATH)) {
-      backup.secrets = fs.readFileSync(SECRETS_PATH, 'utf8');
+    if (fs.existsSync(paths.secrets)) {
+      backup.secrets = fs.readFileSync(paths.secrets, 'utf8');
     }
 
     fs.writeFileSync(backupPath, JSON.stringify(backup, null, 2), { mode: 0o600 });

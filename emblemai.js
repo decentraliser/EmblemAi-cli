@@ -28,13 +28,30 @@ import { getPassword, getCredential, authenticate, webLogin, promptPassword, aut
 import { saveSession } from './src/session-store.js';
 import { processCommand } from './src/commands.js';
 import { PluginManager } from './src/plugins/loader.js';
+import {
+  DEFAULT_PROFILE,
+  createProfile,
+  deleteProfile,
+  ensureProfileDir,
+  getStoredActiveProfile,
+  getProfilePaths,
+  hasMultipleProfiles,
+  inspectProfile,
+  listProfiles,
+  migrateLegacyProfileLayout,
+  profileExists,
+  resolveProfile,
+  setActiveProfile,
+  setCurrentProfile,
+} from './src/profile.js';
 import * as glow from './src/glow.js';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { version: PKG_VERSION } = require('./package.json');
 
-// History directory — partitioned by vaultId
-const HISTORY_DIR = path.join(os.homedir(), '.emblemai', 'history');
+function getHistoryDir() {
+  return getProfilePaths().historyDir;
+}
 
 // ── Formatting (hustle-v5 style) ────────────────────────────────────────────
 
@@ -123,12 +140,42 @@ const paygArg = (() => {
   return null;
 })();
 const passwordArg = getArg(['--password', '-p']);
+const profileArg = getArg(['--profile']);
 const messageArg = getArg(['--message', '-m']);
 const hustleUrlArg = getArg(['--hustle-url']);
 const authUrlArg = getArg(['--auth-url']);
 const apiUrlArg = getArg(['--api-url']);
 const logFileArg = getArg(['--log-file']);
 const restoreAuthArg = getArg(['--restore-auth']);
+
+function getPositionals(argv) {
+  const positionals = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--') {
+      positionals.push(...argv.slice(i + 1));
+      break;
+    }
+    if (arg === '--payg') {
+      const action = argv[i + 1];
+      if (action) i += 1;
+      if (action === 'on' && argv[i + 1] && !argv[i + 1].startsWith('-')) i += 1;
+      continue;
+    }
+    if (['--password', '-p', '--message', '-m', '--hustle-url', '--auth-url', '--api-url', '--log-file', '--restore-auth', '--profile'].includes(arg)) {
+      i += 1;
+      continue;
+    }
+    if (['--agent', '-a', '--reset', '--debug', '--stream', '--log'].includes(arg)) {
+      continue;
+    }
+    positionals.push(arg);
+  }
+  return positionals;
+}
+
+const positionals = getPositionals(args);
+const isProfileCliCommand = positionals[0] === 'profile';
 
 // Endpoint overrides
 const hustleApiUrl = hustleUrlArg || process.env.HUSTLE_API_URL || undefined;
@@ -173,7 +220,7 @@ function log(tag, data) {
 // ── History Management (per-vault) ───────────────────────────────────────────
 
 function historyPath(vaultId) {
-  return path.join(HISTORY_DIR, `${vaultId}.json`);
+  return path.join(getHistoryDir(), `${vaultId}.json`);
 }
 
 function loadHistory(vaultId) {
@@ -187,7 +234,8 @@ function loadHistory(vaultId) {
 }
 
 function saveHistory(history) {
-  fs.mkdirSync(HISTORY_DIR, { recursive: true });
+  ensureProfileDir();
+  fs.mkdirSync(getHistoryDir(), { recursive: true, mode: 0o700 });
   history.lastUpdated = new Date().toISOString();
   fs.writeFileSync(historyPath(history.vaultId), JSON.stringify(history, null, 2));
 }
@@ -205,11 +253,143 @@ function migrateHistory(vaultId) {
     const data = JSON.parse(fs.readFileSync(legacyFile, 'utf8'));
     if (data.messages && data.messages.length > 0) {
       data.vaultId = vaultId;
-      fs.mkdirSync(HISTORY_DIR, { recursive: true });
+      ensureProfileDir();
+      fs.mkdirSync(getHistoryDir(), { recursive: true, mode: 0o700 });
       fs.writeFileSync(historyPath(vaultId), JSON.stringify(data, null, 2));
     }
     fs.unlinkSync(legacyFile);
   } catch {}
+}
+
+function formatProfileInspection(info) {
+  const lines = [
+    chalk.bold.white(`Profile: ${info.name}`),
+    '',
+    `  ${chalk.dim('Default Profile:')} ${info.active ? chalk.green('YES') : chalk.dim('NO')}`,
+    `  ${chalk.dim('Label:')}         ${info.metadata?.label || info.name}`,
+    `  ${chalk.dim('Purpose:')}       ${info.metadata?.purpose || chalk.dim('—')}`,
+    `  ${chalk.dim('Created:')}       ${info.metadata?.createdAt || 'N/A'}`,
+    `  ${chalk.dim('Path:')}          ${info.path}`,
+    `  ${chalk.dim('Session Vault:')} ${info.session?.vaultId || 'N/A'}`,
+    `  ${chalk.dim('Session Auth:')}  ${info.session?.authType || 'N/A'}`,
+    `  ${chalk.dim('Credentials:')}   ${info.files.env ? chalk.green('present') : chalk.dim('missing')}`,
+    `  ${chalk.dim('Secrets:')}       ${info.files.secrets ? chalk.green('present') : chalk.dim('missing')}`,
+    `  ${chalk.dim('Plugins:')}       ${info.files.plugins ? chalk.green('present') : chalk.dim('missing')}`,
+    `  ${chalk.dim('x402 Favs:')}     ${info.files.x402Favorites ? chalk.green('present') : chalk.dim('missing')}`,
+    `  ${chalk.dim('History Files:')} ${info.historyCount}`,
+  ];
+
+  return '\n' + lines.join('\n') + '\n';
+}
+
+function promptTextCli(question) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer);
+    });
+  });
+}
+
+async function handleProfileCliCommand(activeProfile) {
+  const sub = (positionals[1] || 'list').toLowerCase();
+
+  if (sub === 'list') {
+    const profiles = listProfiles();
+    if (profiles.length === 0) {
+      console.log(chalk.dim('No profiles found. The default profile will be created on first use.'));
+      return 0;
+    }
+
+    console.log(chalk.bold.white('Profiles'));
+    console.log(chalk.dim('─'.repeat(40)));
+    for (const profile of profiles) {
+      const badge = profile.active ? chalk.dim(' [default]') : '';
+      const vault = profile.session?.vaultId ? chalk.dim(` · ${profile.session.vaultId}`) : '';
+      console.log(`  ${chalk.white(profile.name)}${badge}${vault}`);
+    }
+    return 0;
+  }
+
+  if (sub === 'create') {
+    const name = positionals[2];
+    if (!name) {
+      console.error(fmt.error('Usage: emblemai profile create <name>'));
+      return 1;
+    }
+
+    try {
+      const created = createProfile(name);
+      console.log(fmt.success(`Profile "${created.name}" created.`));
+      return 0;
+    } catch (err) {
+      console.error(fmt.error(err.message));
+      return 1;
+    }
+  }
+
+  if (sub === 'use') {
+    const name = positionals[2];
+    if (!name) {
+      console.error(fmt.error('Usage: emblemai profile use <name>'));
+      return 1;
+    }
+
+    try {
+      setActiveProfile(name);
+      console.log(fmt.success(`Active profile set to "${name}".`));
+      return 0;
+    } catch (err) {
+      console.error(fmt.error(err.message));
+      return 1;
+    }
+  }
+
+  if (sub === 'inspect') {
+    const name = positionals[2] || activeProfile;
+    if (!name) {
+      console.error(fmt.error('No active profile is set. Pass a profile name or run `emblemai profile use <name>`.'));
+      return 1;
+    }
+    if (!profileExists(name)) {
+      console.error(fmt.error(`Profile "${name}" does not exist.`));
+      return 1;
+    }
+
+    console.log(formatProfileInspection(inspectProfile(name)));
+    return 0;
+  }
+
+  if (sub === 'delete') {
+    const name = positionals[2];
+    if (!name) {
+      console.error(fmt.error('Usage: emblemai profile delete <name>'));
+      return 1;
+    }
+
+    const answer = (await promptTextCli(chalk.yellow(`Delete profile "${name}"? This cannot be undone [y/N]: `))).trim().toLowerCase();
+    if (answer !== 'y' && answer !== 'yes') {
+      console.log(chalk.dim('Profile deletion cancelled.'));
+      return 0;
+    }
+
+    try {
+      deleteProfile(name);
+      console.log(fmt.success(`Profile "${name}" deleted.`));
+      return 0;
+    } catch (err) {
+      console.error(fmt.error(err.message));
+      return 1;
+    }
+  }
+
+  console.error(fmt.error('Usage: emblemai profile [list|create <name>|use <name>|inspect [name]|delete <name>]'));
+  return 1;
 }
 
 function buildMessages(msgs, pluginManager) {
@@ -270,10 +450,79 @@ function stopSpinner() {
   }
 }
 
+async function authenticateInteractiveProfile(config = {}) {
+  const result = await webLogin({ ...config, skipBrowser: true });
+
+  if (result) {
+    return { authSdk: result.authSdk, source: 'saved-session' };
+  }
+
+  const storedPassword = getCredential('EMBLEM_PASSWORD');
+  if (storedPassword && storedPassword.length >= 16) {
+    try {
+      const authResult = await authenticate(storedPassword, config);
+      const session = authResult.authSdk.getSession();
+      if (session) saveSession(session);
+      return { authSdk: authResult.authSdk, source: 'saved-credentials' };
+    } catch {
+      // Fall through to browser login / prompt.
+    }
+  }
+
+  const webResult = await webLogin(config);
+  if (webResult) {
+    return {
+      authSdk: webResult.authSdk,
+      source: webResult.source === 'saved' ? 'saved-session' : 'browser',
+    };
+  }
+
+  const passwordResult = await getPassword({});
+  const password = passwordResult.password;
+  if (!password || password.length < 16) {
+    throw new Error('Password must be at least 16 characters.');
+  }
+
+  const authResult = await authenticate(password, config);
+  const session = authResult.authSdk.getSession();
+  if (session) saveSession(session);
+  return { authSdk: authResult.authSdk, source: 'password' };
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
   try {
+    setCurrentProfile(DEFAULT_PROFILE);
+
+    // Preserve the existing ~/.emblem-vault migration first, then move any
+    // remaining flat ~/.emblemai state into profiles/default.
+    migrateLegacyCredentials();
+    migrateLegacyProfileLayout();
+
+    const activeProfile = isProfileCliCommand
+      ? resolveProfile(profileArg, { allowAmbiguous: true })
+      : resolveProfile(profileArg, { requireExists: !!profileArg && !restoreAuthArg });
+
+    if (activeProfile) {
+      setCurrentProfile(activeProfile);
+    }
+
+    if (!profileArg && activeProfile === DEFAULT_PROFILE && listProfiles().length === 0 && !isProfileCliCommand) {
+      ensureProfileDir(DEFAULT_PROFILE);
+      setActiveProfile(DEFAULT_PROFILE);
+    }
+
+    const multipleProfiles = hasMultipleProfiles();
+    let defaultProfileName = getStoredActiveProfile();
+    if (!defaultProfileName && listProfiles().length === 1) {
+      defaultProfileName = activeProfile;
+    }
+
+    if (isProfileCliCommand) {
+      process.exit(await handleProfileCliCommand(activeProfile));
+    }
+
     // ── Restore auth backup ──────────────────────────────────────────────
     if (restoreAuthArg) {
       const backupPath = path.resolve(restoreAuthArg);
@@ -289,17 +538,17 @@ async function main() {
           process.exit(1);
         }
 
-        const emblemDir = path.join(os.homedir(), '.emblemai');
-        fs.mkdirSync(emblemDir, { recursive: true, mode: 0o700 });
+        const paths = getProfilePaths(activeProfile);
+        ensureProfileDir(activeProfile);
 
-        fs.writeFileSync(path.join(emblemDir, '.env'), backup.env, { mode: 0o600 });
-        fs.writeFileSync(path.join(emblemDir, '.env.keys'), backup.envKeys, { mode: 0o600 });
+        fs.writeFileSync(paths.env, backup.env, { mode: 0o600 });
+        fs.writeFileSync(paths.envKeys, backup.envKeys, { mode: 0o600 });
 
         if (backup.secrets) {
-          fs.writeFileSync(path.join(emblemDir, 'secrets.json'), backup.secrets, { mode: 0o600 });
+          fs.writeFileSync(paths.secrets, backup.secrets, { mode: 0o600 });
         }
 
-        console.log(fmt.success('Auth restored from backup.'));
+        console.log(fmt.success(`Auth restored into profile "${activeProfile}".`));
         console.log(chalk.dim('  Run emblemai to start.'));
       } catch (err) {
         console.error(fmt.error(`Failed to restore: ${err.message}`));
@@ -308,8 +557,16 @@ async function main() {
       process.exit(0);
     }
 
-    // ── Migrate legacy credentials ───────────────────────────────────────
-    migrateLegacyCredentials();
+    if (multipleProfiles && !profileArg) {
+      if (isAgentMode) {
+        console.error(fmt.error('Multiple profiles detected. In agent mode you must pass --profile <name>.'));
+        process.exit(1);
+      }
+      if (paygArg) {
+        console.error(fmt.error('Multiple profiles detected. Re-run with --profile <name> to change PAYG settings.'));
+        process.exit(1);
+      }
+    }
 
     // ── Authenticate ──────────────────────────────────────────────────────
     let authSdk;
@@ -334,7 +591,7 @@ async function main() {
       if (!isAgentMode && !isReset) console.log(chalk.dim('\nAuthenticating with Agent Hustle...'));
 
       ({ authSdk } = await authenticate(password, { authUrl, apiUrl }));
-      // Save session so the ElizaOS plugin can pick it up from ~/.emblemai/session.json
+      // Save session so plugins can reuse the current profile's auth session.
       const sess = authSdk.getSession();
       if (sess) saveSession(sess);
     } else {
@@ -342,49 +599,20 @@ async function main() {
       console.log(chalk.dim('\nChecking for saved session...'));
 
       // 1. Try saved session (session.json)
-      const result = await webLogin({ authUrl, apiUrl, skipBrowser: true });
+      const result = await authenticateInteractiveProfile({ authUrl, apiUrl });
 
-      if (result) {
+      if (result?.authSdk) {
         ({ authSdk } = result);
-        console.log(fmt.success('Authenticated via saved session'));
-      } else {
-        // 2. Try stored password credentials (from agent mode or -p)
-        const storedPassword = getCredential('EMBLEM_PASSWORD');
-
-        if (storedPassword && storedPassword.length >= 16) {
-          try {
-            console.log(chalk.dim('Found saved credentials, authenticating...'));
-            ({ authSdk } = await authenticate(storedPassword, { authUrl, apiUrl }));
-            const sess = authSdk.getSession();
-            if (sess) saveSession(sess);
-            console.log(fmt.success('Authenticated via saved credentials'));
-          } catch {
-            // Stored password failed — continue to web login
-            authSdk = null;
-          }
-        }
-
-        // 3. Web login (browser) if nothing else worked
-        if (!authSdk) {
-          const webResult = await webLogin({ authUrl, apiUrl });
-
-          if (webResult) {
-            ({ authSdk } = webResult);
-            console.log(fmt.success(webResult.source === 'saved' ? 'Authenticated via saved session' : 'Authenticated via browser'));
-          } else {
-            // 4. Fall back to password prompt
-            console.log(chalk.dim('Falling back to password authentication...'));
-            const passwordResult = await getPassword({});
-            const password = passwordResult.password;
-
-            if (!password || password.length < 16) {
-              console.error(fmt.error('Password must be at least 16 characters.'));
-              process.exit(1);
-            }
-
-            console.log(chalk.dim('\nAuthenticating with Agent Hustle...'));
-            ({ authSdk } = await authenticate(password, { authUrl, apiUrl }));
-          }
+        if (result.source === 'saved-session') {
+          console.log(fmt.success('Authenticated via saved session'));
+        } else if (result.source === 'saved-credentials') {
+          console.log(chalk.dim('Found saved credentials, authenticating...'));
+          console.log(fmt.success('Authenticated via saved credentials'));
+        } else if (result.source === 'browser') {
+          console.log(fmt.success('Authenticated via browser'));
+        } else if (result.source === 'password') {
+          console.log(chalk.dim('Falling back to password authentication...'));
+          console.log(chalk.dim('\nAuthenticating with Agent Hustle...'));
         }
       }
     }
@@ -406,7 +634,7 @@ async function main() {
     const hustleClientConfig = { sdk: authSdk, debug: initialDebug };
     if (hustleApiUrl) hustleClientConfig.hustleApiUrl = hustleApiUrl;
 
-    const client = new HustleIncognitoClient(hustleClientConfig);
+    let client = new HustleIncognitoClient(hustleClientConfig);
 
     // ── Handle --payg (configure, then continue or exit) ───────────────────
     if (paygArg) {
@@ -447,7 +675,7 @@ async function main() {
     let history = loadHistory(vaultId);
 
     // ── Plugin Manager ────────────────────────────────────────────────────
-    const pluginManager = new PluginManager(client);
+    let pluginManager = new PluginManager(client);
 
     // Build per-plugin config from env vars
     const pluginSecrets = readPluginSecrets();
@@ -509,6 +737,14 @@ async function main() {
     console.log(fmt.brand('║') + ' '.repeat(W) + fmt.brand('║'));
     console.log(fmt.brand('╚' + '═'.repeat(W) + '╝'));
     console.log('');
+    console.log(chalk.dim(`  Session Profile: ${activeProfile}`));
+    if (defaultProfileName) {
+      const suffix = defaultProfileName === activeProfile ? '' : ' (new sessions)';
+      console.log(chalk.dim(`  Default Profile: ${defaultProfileName}${suffix}`));
+    }
+    if (multipleProfiles) {
+      console.log(chalk.dim('  Tip: use --profile <name> to start a different session.'));
+    }
 
     // Load plugins
     console.log(chalk.dim('  Loading plugins...'));
@@ -538,17 +774,94 @@ async function main() {
       input: process.stdin,
       output: process.stdout,
       completer: (line) => {
-        const cmds = ['/help', '/plugins', '/tools', '/auth', '/wallet',
+        const cmds = ['/help', '/profile', '/plugins', '/tools', '/auth', '/wallet',
           '/portfolio', '/model', '/stream', '/debug', '/history', '/payment',
           '/secrets', '/glow', '/log', '/reset', '/exit', '/settings'];
         const hits = cmds.filter(c => c.startsWith(line));
         return [hits.length ? hits : cmds, line];
       },
     });
-    const prompt = () => new Promise(r => rl.question(chalk.cyan('emblem> '), r));
+    let ctx;
+    const prompt = () => new Promise((resolveInput) => {
+      const sessionProfile = ctx?.profileName || activeProfile || DEFAULT_PROFILE;
+      const nextProfile = ctx?.activeProfileName || defaultProfileName;
+      const profileLabel = nextProfile && nextProfile !== sessionProfile
+        ? `${sessionProfile}→${nextProfile}`
+        : sessionProfile;
+      const promptLabel = chalk.cyan('emblem') + chalk.dim(`[${profileLabel}]`) + chalk.cyan('> ');
+      rl.question(promptLabel, resolveInput);
+    });
 
-    const ctx = {
+    ctx = {
       client, settings, pluginManager, history, tui: null, authSdk, glow, saveHistory,
+      activeProfileName: defaultProfileName,
+      profileName: activeProfile,
+      switchProfile: async (name) => {
+        if (!profileExists(name)) {
+          throw new Error(`Profile "${name}" does not exist.`);
+        }
+
+        if (ctx.profileName === name && ctx.activeProfileName === name) {
+          return { profileName: name };
+        }
+
+        const previousProfile = ctx.profileName;
+        const previousAuthSdk = authSdk;
+        const previousClient = client;
+        const previousPluginManager = pluginManager;
+        const previousHistory = history;
+        const previousDefaultProfile = defaultProfileName;
+
+        if (typeof ctx.saveHistory === 'function') {
+          ctx.saveHistory(history);
+        }
+
+        try {
+          setCurrentProfile(name);
+          const authResult = await authenticateInteractiveProfile({ authUrl, apiUrl });
+          authSdk = authResult.authSdk;
+
+          const nextVaultId = authSdk.getSession()?.user?.vaultId;
+          migrateHistory(nextVaultId);
+
+          const nextClientConfig = { sdk: authSdk, debug: settings.debug };
+          if (hustleApiUrl) nextClientConfig.hustleApiUrl = hustleApiUrl;
+          client = new HustleIncognitoClient(nextClientConfig);
+
+          pluginManager = new PluginManager(client);
+          const nextPluginSecrets = readPluginSecrets();
+          await pluginManager.loadAll(pluginConfig, { authSdk, credentials: { secrets: nextPluginSecrets } });
+
+          history = loadHistory(nextVaultId);
+          setActiveProfile(name);
+          defaultProfileName = name;
+
+          ctx.authSdk = authSdk;
+          ctx.client = client;
+          ctx.pluginManager = pluginManager;
+          ctx.history = history;
+          ctx.profileName = name;
+          ctx.activeProfileName = name;
+
+          return { profileName: name };
+        } catch (err) {
+          setCurrentProfile(previousProfile);
+          authSdk = previousAuthSdk;
+          client = previousClient;
+          pluginManager = previousPluginManager;
+          history = previousHistory;
+          defaultProfileName = previousDefaultProfile;
+
+          ctx.authSdk = authSdk;
+          ctx.client = client;
+          ctx.pluginManager = pluginManager;
+          ctx.history = history;
+          ctx.profileName = previousProfile;
+          ctx.activeProfileName = previousDefaultProfile;
+
+          throw err;
+        }
+      },
       promptText: (q) => new Promise(r => rl.question(q, r)),
       promptPassword,
       addLog: (type, msg) => {
@@ -721,7 +1034,8 @@ async function main() {
           if (settings.selectedTools.length > 0) chatOptions.selectedToolCategories = settings.selectedTools;
           else if (lastIntentContext) chatOptions.intentContext = lastIntentContext;
 
-          const result = await client.chat(chatMessages, {...chatOptions, rawResponse: false });
+          const res = await client.chat(chatMessages, { ...chatOptions, rawResponse: false });
+          const result = /** @type {import('hustle-incognito').ProcessedResponse} */ (res);
           if (result.intentContext?.intentContext) lastIntentContext = result.intentContext.intentContext;
           response = result.content;
           log('response', { len: response.length, toolCalls: result.toolCalls?.length || 0 });
