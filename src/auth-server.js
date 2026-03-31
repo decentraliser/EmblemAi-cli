@@ -21,7 +21,6 @@ try {
   const sdkMinPath = join(sdkRoot, 'dist', 'emblem-auth.min.js');
   SDK_BUNDLE = readFileSync(sdkMinPath, 'utf8');
   SDK_VERSION = JSON.parse(readFileSync(join(sdkRoot, 'package.json'), 'utf8')).version;
-  console.log(`[auth-server] Local SDK bundle loaded (v${SDK_VERSION})`);
 } catch (err) {
   console.warn(`[auth-server] Could not load local SDK bundle: ${err.message} — will use CDN fallback`);
 }

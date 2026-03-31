@@ -31,13 +31,14 @@ EmblemAI v3 supports two authentication modes: **browser auth** for interactive 
 
 When you run `emblemai` without `-p`, the CLI:
 
-1. Checks `~/.emblemai/session.json` for a saved session
-2. If a valid (non-expired) session exists, restores it instantly -- no login needed
-3. If no session, starts a local server on `127.0.0.1:18247` and opens your browser
-4. You authenticate via the EmblemVault auth modal in the browser
-5. The session JWT is captured, saved to disk, and the CLI proceeds
-6. If the browser can't open, the URL is printed for manual copy-paste
-7. If authentication times out (5 minutes), falls back to a password prompt
+1. Resolves the active profile from `--profile`, `~/.emblemai/active-profile`, or `default`
+2. Checks `~/.emblemai/profiles/<profile>/session.json` for a saved session
+3. If a valid (non-expired) session exists, restores it instantly -- no login needed
+4. If no session, starts a local server on `127.0.0.1:18247` and opens your browser
+5. You authenticate via the EmblemVault auth modal in the browser
+6. The session JWT is captured, saved to disk, and the CLI proceeds
+7. If the browser can't open, the URL is printed for manual copy-paste
+8. If authentication times out (5 minutes), falls back to a password prompt
 
 ### Password Auth (Agent Mode and `-p` flag)
 
@@ -58,7 +59,7 @@ Password auth is a core feature for agent workflows because it gives repeatable 
 |--------|-----------|----------|
 | CLI argument | `emblemai -p "your-password-16-chars-min"` | 1 (highest, stored encrypted) |
 | Environment variable | `export EMBLEM_PASSWORD="your-password"` | 2 (not stored) |
-| Encrypted credential | dotenvx-encrypted `~/.emblemai/.env` | 3 |
+| Encrypted credential | dotenvx-encrypted `~/.emblemai/profiles/<profile>/.env` | 3 |
 | Auto-generate (agent mode) | Automatic on first run | 4 |
 | Interactive prompt | Fallback when browser auth fails | 5 (lowest) |
 
@@ -81,6 +82,7 @@ Readline-based interactive mode with streaming, glow rendering, and slash comman
 
 ```bash
 emblemai              # Browser auth (recommended)
+emblemai --profile treasury
 emblemai -p "your-password"  # Password auth (skips browser)
 ```
 
@@ -88,9 +90,12 @@ emblemai -p "your-password"  # Password auth (skips browser)
 
 Single-shot queries for scripts and AI agent integrations. Sends one message, prints the response, and exits. Always uses password auth.
 
+If more than one profile exists in `$HOME/.emblemai`, every agent-mode invocation must include `--profile <name>`. Agent mode never guesses which wallet identity to use.
+
 ```bash
 emblemai --agent -p "your-password" -m "What are my wallet addresses?"
 emblemai -a -p "your-password" -m "Show all my balances"
+emblemai --profile treasury --agent -m "Show my balances"
 ```
 
 ### Reset Conversation
@@ -113,13 +118,14 @@ If you are using password auth, especially auto-generated password auth in agent
 emblemai --restore-auth ~/emblemai-auth-backup.json
 ```
 
-This places the credential files in `~/.emblemai/` so you can authenticate immediately.
+This restores the credential files into the resolved active profile. If you pass `--profile <name>`, restore writes into that profile and creates it first when needed.
 
 ## Command-Line Flags
 
 | Flag | Alias | Description |
 |------|-------|-------------|
 | `--password <pw>` | `-p` | Authentication password (16+ chars) -- skips browser auth |
+| `--profile <name>` | | Select a named wallet profile for this invocation. Required in agent mode when more than one profile exists. |
 | `--message <msg>` | `-m` | Message for agent mode |
 | `--agent` | `-a` | Run in agent mode (single-shot, password auth only) |
 | `--restore-auth <path>` | | Restore credentials from backup file and exit |
@@ -158,14 +164,15 @@ CLI arguments override environment variables when both are provided.
 
 | File | Purpose |
 |------|---------|
-| `~/.emblemai/.env` | dotenvx-encrypted credentials (EMBLEM_PASSWORD) |
-| `~/.emblemai/.env.keys` | dotenvx private decryption key (chmod 600) |
-| `~/.emblemai/secrets.json` | auth-sdk encrypted plugin secrets |
-| `~/.emblemai/session.json` | Saved browser auth session (auto-managed) |
-| `~/.emblemai/history/{vaultId}.json` | Conversation history (per vault) |
-| `~/.emblemai/x402-favorites.json` | Saved x402 favorite services |
+| `~/.emblemai/active-profile` | Persisted active profile name |
+| `~/.emblemai/profiles/<profile>/.env` | dotenvx-encrypted credentials (EMBLEM_PASSWORD) |
+| `~/.emblemai/profiles/<profile>/.env.keys` | dotenvx private decryption key (chmod 600) |
+| `~/.emblemai/profiles/<profile>/secrets.json` | auth-sdk encrypted plugin secrets |
+| `~/.emblemai/profiles/<profile>/session.json` | Saved browser auth session (auto-managed) |
+| `~/.emblemai/profiles/<profile>/history/{vaultId}.json` | Conversation history (per vault) |
+| `~/.emblemai/profiles/<profile>/x402-favorites.json` | Saved x402 favorite services |
 | `~/.emblemai-stream.log` | Stream log (when enabled) |
-| `~/.emblemai-plugins.json` | Custom plugin definitions |
+| `~/.emblemai/profiles/<profile>/plugins.json` | Custom plugin definitions |
 
 Legacy credentials (`~/.emblem-vault`) are automatically migrated to the new dotenvx-encrypted format on first run. The old file is backed up to `~/.emblem-vault.bak`.
 

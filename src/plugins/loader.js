@@ -5,11 +5,12 @@
  */
 
 import fs from 'fs';
-import path from 'path';
-import os from 'os';
 import chalk from 'chalk';
+import { ensureProfileDir, getProfilePaths } from '../profile.js';
 
-const CUSTOM_PLUGINS_FILE = path.join(os.homedir(), '.emblemai-plugins.json');
+function getCustomPluginsFile() {
+  return getProfilePaths().plugins;
+}
 
 /** Valid plugin name: lowercase, starts with letter, allows hyphens/digits */
 const PLUGIN_NAME_RE = /^[a-z][a-z0-9-]{0,63}$/;
@@ -455,7 +456,7 @@ export class PluginManager {
   // ---------------------------------------------------------------------------
 
   /**
-   * Load custom plugins stored in ~/.emblemai-plugins.json.
+   * Load custom plugins stored in the active profile's plugins.json.
    * Custom plugins use serialized executor code that is compiled at load time.
    * Custom plugins use serialized executor code that is compiled at load time.
    * @private
@@ -463,8 +464,9 @@ export class PluginManager {
   async _loadCustomPlugins() {
     let data;
     try {
-      if (!fs.existsSync(CUSTOM_PLUGINS_FILE)) return;
-      data = JSON.parse(fs.readFileSync(CUSTOM_PLUGINS_FILE, 'utf8'));
+      const pluginsFile = getCustomPluginsFile();
+      if (!fs.existsSync(pluginsFile)) return;
+      data = JSON.parse(fs.readFileSync(pluginsFile, 'utf8'));
     } catch {
       return;
     }
@@ -476,7 +478,7 @@ export class PluginManager {
 
       // Reconstitute executors from serialized code strings.
       // Dynamic code execution for custom plugins —
-      // only user-authored code from their own ~/.emblemai-plugins.json is loaded.
+      // only user-authored code from their own profile plugins.json is loaded.
       const executors = {};
       if (Array.isArray(stored.tools)) {
         for (const tool of stored.tools) {
@@ -508,9 +510,10 @@ export class PluginManager {
    */
   saveCustomPlugin(plugin) {
     let data = [];
+    const pluginsFile = getCustomPluginsFile();
     try {
-      if (fs.existsSync(CUSTOM_PLUGINS_FILE)) {
-        const raw = JSON.parse(fs.readFileSync(CUSTOM_PLUGINS_FILE, 'utf8'));
+      if (fs.existsSync(pluginsFile)) {
+        const raw = JSON.parse(fs.readFileSync(pluginsFile, 'utf8'));
         if (Array.isArray(raw)) data = raw;
       }
     } catch {
@@ -524,7 +527,8 @@ export class PluginManager {
       data.push(plugin);
     }
 
-    fs.writeFileSync(CUSTOM_PLUGINS_FILE, JSON.stringify(data, null, 2));
+    ensureProfileDir();
+    fs.writeFileSync(pluginsFile, JSON.stringify(data, null, 2));
   }
 
   /**
@@ -533,11 +537,12 @@ export class PluginManager {
    */
   removeCustomPlugin(name) {
     try {
-      if (!fs.existsSync(CUSTOM_PLUGINS_FILE)) return;
-      let data = JSON.parse(fs.readFileSync(CUSTOM_PLUGINS_FILE, 'utf8'));
+      const pluginsFile = getCustomPluginsFile();
+      if (!fs.existsSync(pluginsFile)) return;
+      let data = JSON.parse(fs.readFileSync(pluginsFile, 'utf8'));
       if (!Array.isArray(data)) return;
       data = data.filter(p => p.name !== name);
-      fs.writeFileSync(CUSTOM_PLUGINS_FILE, JSON.stringify(data, null, 2));
+      fs.writeFileSync(pluginsFile, JSON.stringify(data, null, 2));
     } catch {
       // Best-effort
     }

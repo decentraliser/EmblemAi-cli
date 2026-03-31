@@ -6,6 +6,15 @@
  */
 
 import chalk from 'chalk';
+import {
+  createProfile,
+  deleteProfile,
+  inspectProfile,
+  listProfiles,
+  profileExists,
+  resolveProfile,
+  setActiveProfile,
+} from './profile.js';
 
 // ============================================================================
 // Command Registry (for /help display)
@@ -13,6 +22,8 @@ import chalk from 'chalk';
 
 export const COMMANDS = [
   { cmd: '/help', desc: 'Show all commands' },
+  { cmd: '/profile', desc: 'List and manage profiles' },
+  { cmd: '/profile create|use|inspect|delete', desc: 'Manage named wallet profiles' },
   { cmd: '/plugins', desc: 'List all plugins with status' },
   { cmd: '/plugin <name> on|off', desc: 'Toggle plugin' },
   { cmd: '/tools', desc: 'List available tools' },
@@ -26,10 +37,10 @@ export const COMMANDS = [
   { cmd: '/stream on|off', desc: 'Toggle streaming' },
   { cmd: '/debug on|off', desc: 'Toggle debug mode' },
   { cmd: '/history on|off', desc: 'Toggle history' },
-  { cmd: '/payment', desc: 'PAYG billing status' },
-  { cmd: '/payment enable|disable', desc: 'Toggle PAYG' },
-  { cmd: '/payment token <T>', desc: 'Set payment token' },
-  { cmd: '/payment mode <M>', desc: 'Set payment mode' },
+  { cmd: '/payment', desc: 'Show PAYG status, mode guide, and token usage' },
+  { cmd: '/payment enable|disable', desc: 'Turn PAYG charging on or off' },
+  { cmd: '/payment token <T>', desc: 'Choose the token used to settle PAYG charges' },
+  { cmd: '/payment mode <M>', desc: 'Set mode: pay_per_request or debt_accumulation' },
 { cmd: '/x402', desc: 'x402 payment plugin — search, call, stats, favorites' },
   { cmd: '/secrets', desc: 'Manage encrypted plugin secrets' },
   { cmd: '/glow on|off', desc: 'Toggle markdown rendering' },
@@ -41,6 +52,231 @@ export const COMMANDS = [
 // ============================================================================
 // Command Handlers
 // ============================================================================
+
+function describePaygMode(mode) {
+  if (mode === 'pay_per_request') {
+    return 'Each paid request is settled immediately using the selected payment token.';
+  }
+  if (mode === 'debt_accumulation') {
+    return 'Requests can accrue debt until the server-side debt ceiling is reached, then new requests may be blocked until debt is paid down.';
+  }
+  return 'No payment mode is configured yet.';
+}
+
+function describePaygToken(status) {
+  if (!status.payment_token) {
+    return 'No payment token is selected yet. Set one with /payment token <TOKEN>.';
+  }
+  const chainText = status.payment_chain ? ` on ${status.payment_chain}` : '';
+  return `${status.payment_token}${chainText} is the asset used when PAYG settles charges.`;
+}
+
+function getProfileStatus(ctx, profileName) {
+  return {
+    isCurrent: !!ctx?.profileName && ctx.profileName === profileName,
+    isDefault: !!ctx?.activeProfileName && ctx.activeProfileName === profileName,
+  };
+}
+
+function formatProfileBadges(ctx, profileName) {
+  const badges = [];
+  const { isCurrent, isDefault } = getProfileStatus(ctx, profileName);
+
+  if (isCurrent) badges.push(chalk.cyan('current'));
+  if (isDefault) badges.push(chalk.green('default'));
+
+  return badges.length > 0 ? chalk.dim(` [${badges.join(', ')}]`) : '';
+}
+
+function formatProfileDetails(info, ctx, runtimeVaultInfo = null) {
+  const { isCurrent, isDefault } = getProfileStatus(ctx, info.name);
+  const lines = [
+    chalk.bold.white(`Profile: ${info.name}`) + formatProfileBadges(ctx, info.name),
+    '',
+    `  ${chalk.dim('This Session:')}  ${isCurrent ? chalk.green('YES') : chalk.dim('NO')}`,
+    `  ${chalk.dim('New Sessions:')}  ${isDefault ? chalk.green('YES') : chalk.dim('NO')}`,
+    `  ${chalk.dim('Label:')}         ${info.metadata?.label || info.name}`,
+    `  ${chalk.dim('Purpose:')}       ${info.metadata?.purpose || chalk.dim('—')}`,
+    `  ${chalk.dim('Created:')}       ${info.metadata?.createdAt || 'N/A'}`,
+    `  ${chalk.dim('Path:')}          ${info.path}`,
+    `  ${chalk.dim('Session Vault:')} ${info.session?.vaultId || 'N/A'}`,
+    `  ${chalk.dim('Session Auth:')}  ${info.session?.authType || 'N/A'}`,
+    `  ${chalk.dim('Credentials:')}   ${info.files.env ? chalk.green('present') : chalk.dim('missing')}`,
+    `  ${chalk.dim('Secrets:')}       ${info.files.secrets ? chalk.green('present') : chalk.dim('missing')}`,
+    `  ${chalk.dim('Plugins:')}       ${info.files.plugins ? chalk.green('present') : chalk.dim('missing')}`,
+    `  ${chalk.dim('x402 Favs:')}     ${info.files.x402Favorites ? chalk.green('present') : chalk.dim('missing')}`,
+    `  ${chalk.dim('History Files:')} ${info.historyCount}`,
+  ];
+
+  if (isCurrent && ctx?.activeProfileName && ctx.activeProfileName !== info.name) {
+    lines.push(`  ${chalk.dim('Profile Drift:')}  New shells now default to ${chalk.white(ctx.activeProfileName)}`);
+  }
+
+  if (runtimeVaultInfo) {
+    lines.push(
+      '',
+      chalk.bold.white('Current Runtime Vault'),
+      `  ${chalk.dim('Vault ID:')}      ${runtimeVaultInfo.vaultId || 'N/A'}`,
+      `  ${chalk.dim('EVM Address:')}   ${runtimeVaultInfo.evmAddress || 'N/A'}`,
+      `  ${chalk.dim('Solana Address:')}${runtimeVaultInfo.solanaAddress || runtimeVaultInfo.address ? ' ' + chalk.white(runtimeVaultInfo.solanaAddress || runtimeVaultInfo.address) : ' N/A'}`
+    );
+  }
+
+  return '\n' + lines.join('\n') + '\n';
+}
+
+async function cmdProfile(args, ctx) {
+  const parts = args.trim().split(/\s+/).filter(Boolean);
+  const sub = (parts[0] || 'list').toLowerCase();
+
+  if (sub === 'list') {
+    const profiles = listProfiles();
+    if (profiles.length === 0) {
+      ctx.appendMessage('system', chalk.dim('No profiles found. The default profile will be created on first use.'));
+      return { handled: true };
+    }
+
+    const lines = [
+      '',
+      chalk.bold.white('Profiles'),
+      chalk.dim('─'.repeat(40)),
+      ...profiles.map((profile) => {
+        const vault = profile.session?.vaultId ? chalk.dim(` · ${profile.session.vaultId}`) : '';
+        return `  ${chalk.white(profile.name)}${formatProfileBadges(ctx, profile.name)}${vault}`;
+      }),
+      '',
+      chalk.dim('  current = this shell · default = new shells'),
+      '',
+    ];
+
+    ctx.appendMessage('system', lines.join('\n'));
+    return { handled: true };
+  }
+
+  if (sub === 'create') {
+    const name = parts[1];
+    if (!name) {
+      ctx.appendMessage('system', chalk.yellow('Usage: /profile create <name>'));
+      return { handled: true };
+    }
+
+    try {
+      const profile = createProfile(name);
+      ctx.appendMessage('system', chalk.green(`Profile "${profile.name}" created.`));
+      ctx.addLog('profile', `Created ${profile.name}`);
+    } catch (err) {
+      ctx.appendMessage('system', chalk.red(`Profile error: ${err.message}`));
+    }
+    return { handled: true };
+  }
+
+  if (sub === 'use') {
+    const name = parts[1];
+    if (!name) {
+      ctx.appendMessage('system', chalk.yellow('Usage: /profile use <name>'));
+      return { handled: true };
+    }
+
+    try {
+      if (typeof ctx.switchProfile === 'function') {
+        const result = await ctx.switchProfile(name);
+        const switchedName = result?.profileName || name;
+        ctx.appendMessage(
+          'system',
+          chalk.green(`Switched this session and new sessions to profile "${switchedName}".`)
+        );
+      } else {
+        setActiveProfile(name);
+        ctx.activeProfileName = name;
+
+        if (ctx.profileName === name) {
+          ctx.appendMessage('system', chalk.green(`Default profile remains "${name}". This session is already using it.`));
+        } else {
+          ctx.appendMessage(
+            'system',
+            chalk.green(`Default profile set to "${name}" for new sessions.`) +
+              chalk.dim(` This session stays on "${ctx.profileName}".`)
+          );
+        }
+      }
+      ctx.addLog('profile', `Set active profile to ${name}`);
+    } catch (err) {
+      ctx.appendMessage('system', chalk.red(`Profile error: ${err.message}`));
+    }
+    return { handled: true };
+  }
+
+  if (sub === 'inspect') {
+    let name = null;
+    const target = (parts[1] || 'current').toLowerCase();
+
+    if (target === 'current' || target === 'session') {
+      name = ctx.profileName || null;
+    } else if (target === 'default' || target === 'active') {
+      name = ctx.activeProfileName || resolveProfile(null, { allowAmbiguous: true });
+    } else {
+      name = parts[1];
+    }
+
+    if (!name) {
+      ctx.appendMessage('system', chalk.yellow('No default profile is set. Pass a profile name or run /profile use <name>.'));
+      return { handled: true };
+    }
+
+    if (!profileExists(name)) {
+      ctx.appendMessage('system', chalk.red(`Profile "${name}" does not exist.`));
+      return { handled: true };
+    }
+
+    let runtimeVaultInfo = null;
+    if (ctx.authSdk && ctx.profileName === name) {
+      try {
+        runtimeVaultInfo = await ctx.authSdk.getVaultInfo();
+      } catch {
+        runtimeVaultInfo = null;
+      }
+    }
+
+    ctx.appendMessage('system', formatProfileDetails(inspectProfile(name), ctx, runtimeVaultInfo));
+    return { handled: true };
+  }
+
+  if (sub === 'delete') {
+    const name = parts[1];
+    if (!name) {
+      ctx.appendMessage('system', chalk.yellow('Usage: /profile delete <name>'));
+      return { handled: true };
+    }
+
+    if (ctx.profileName === name) {
+      ctx.appendMessage('system', chalk.red(`Cannot delete the current runtime profile "${name}".`));
+      return { handled: true };
+    }
+
+    if (!ctx.promptText) {
+      ctx.appendMessage('system', chalk.red('Interactive confirmation is not available in this mode.'));
+      return { handled: true };
+    }
+
+    const answer = (await ctx.promptText(chalk.yellow(`Delete profile "${name}"? This cannot be undone [y/N]: `))).trim().toLowerCase();
+    if (answer !== 'y' && answer !== 'yes') {
+      ctx.appendMessage('system', chalk.dim('Profile deletion cancelled.'));
+      return { handled: true };
+    }
+
+    try {
+      deleteProfile(name);
+      ctx.appendMessage('system', chalk.green(`Profile "${name}" deleted.`));
+      ctx.addLog('profile', `Deleted ${name}`);
+    } catch (err) {
+      ctx.appendMessage('system', chalk.red(`Profile error: ${err.message}`));
+    }
+    return { handled: true };
+  }
+
+  ctx.appendMessage('system', chalk.yellow('Usage: /profile [list|create <name>|use <name>|inspect [name]|delete <name>]'));
+  return { handled: true };
+}
 
 function cmdHelp(ctx) {
   const maxCmd = Math.max(...COMMANDS.map(c => c.cmd.length));
@@ -273,6 +509,8 @@ function cmdSettings(ctx) {
   const lines = [
     chalk.bold.white('Current Settings'),
     '',
+    `  ${chalk.dim('Session Profile:')} ${ctx.profileName || resolveProfile(null, { allowAmbiguous: true }) || 'N/A'}`,
+    `  ${chalk.dim('Default Profile:')} ${ctx.activeProfileName || chalk.dim('not set')}`,
     `  ${chalk.dim('App ID:')}       emblem-agent-wallet`,
     `  ${chalk.dim('Vault ID:')}     ${sess?.user?.vaultId || 'N/A'}`,
     `  ${chalk.dim('Auth Mode:')}    Password (headless)`,
@@ -375,11 +613,12 @@ async function cmdPayment(args, ctx) {
   if (parts.length === 0) {
     try {
       const status = await ctx.client.getPaygStatus();
+      const mode = status.mode || 'N/A';
       const lines = [
         chalk.bold.white('PAYG Billing Status'),
         '',
         `  ${chalk.dim('Enabled:')}         ${status.enabled ? chalk.green('YES') : chalk.red('NO')}`,
-        `  ${chalk.dim('Mode:')}            ${status.mode || 'N/A'}`,
+        `  ${chalk.dim('Mode:')}            ${mode}`,
         `  ${chalk.dim('Payment Token:')}   ${status.payment_token || 'N/A'}`,
         `  ${chalk.dim('Payment Chain:')}   ${status.payment_chain || 'N/A'}`,
         `  ${chalk.dim('Blocked:')}         ${status.is_blocked ? chalk.red('YES') : chalk.green('NO')}`,
@@ -391,6 +630,18 @@ async function cmdPayment(args, ctx) {
       if (status.available_tokens && status.available_tokens.length > 0) {
         lines.push('', `  ${chalk.dim('Available Tokens:')} ${status.available_tokens.join(', ')}`);
       }
+      lines.push(
+        '',
+        chalk.bold.white('How PAYG Works'),
+        `  ${chalk.dim('Selected Token:')} ${describePaygToken(status)}`,
+        `  ${chalk.dim('Current Mode:')}   ${describePaygMode(status.mode)}`,
+        '',
+        chalk.bold.white('Mode Guide'),
+        `  ${chalk.dim('pay_per_request:')} Settle each paid request immediately.`,
+        `  ${chalk.dim('debt_accumulation:')} Allow debt to build up until the server-side ceiling is reached.`,
+        '',
+        `  ${chalk.dim('Commands:')} /payment enable | disable | token <TOKEN> | mode <pay_per_request|debt_accumulation>`
+      );
       lines.push('');
       ctx.appendMessage('system', lines.join('\n'));
     } catch (err) {
@@ -406,7 +657,7 @@ async function cmdPayment(args, ctx) {
     try {
       const result = await ctx.client.configurePayg({ enabled: true });
       ctx.appendMessage('system', result.success
-        ? chalk.green('PAYG billing enabled.')
+        ? chalk.green('PAYG billing enabled.') + chalk.dim(' Existing mode and token stay server-side until you change them.')
         : chalk.red('Failed to enable PAYG.'));
       ctx.addLog('payment', 'Enabled PAYG');
     } catch (err) {
@@ -420,7 +671,7 @@ async function cmdPayment(args, ctx) {
     try {
       const result = await ctx.client.configurePayg({ enabled: false });
       ctx.appendMessage('system', result.success
-        ? chalk.yellow('PAYG billing disabled.')
+        ? chalk.yellow('PAYG billing disabled.') + chalk.dim(' No new PAYG charges will be created while it is off.')
         : chalk.red('Failed to disable PAYG.'));
       ctx.addLog('payment', 'Disabled PAYG');
     } catch (err) {
@@ -435,7 +686,7 @@ async function cmdPayment(args, ctx) {
     try {
       const result = await ctx.client.configurePayg({ payment_token: token });
       ctx.appendMessage('system', result.success
-        ? chalk.green(`Payment token set to: ${token}`)
+        ? chalk.green(`Payment token set to: ${token}`) + chalk.dim(' This token is used when PAYG settles charges.')
         : chalk.red('Failed to set payment token.'));
       ctx.addLog('payment', `Token set to ${token}`);
     } catch (err) {
@@ -454,7 +705,7 @@ async function cmdPayment(args, ctx) {
     try {
       const result = await ctx.client.configurePayg({ mode });
       ctx.appendMessage('system', result.success
-        ? chalk.green(`Payment mode set to: ${mode}`)
+        ? chalk.green(`Payment mode set to: ${mode}`) + chalk.dim(` ${describePaygMode(mode)}`)
         : chalk.red('Failed to set payment mode.'));
       ctx.addLog('payment', `Mode set to ${mode}`);
     } catch (err) {
@@ -463,7 +714,7 @@ async function cmdPayment(args, ctx) {
     return { handled: true };
   }
 
-  ctx.appendMessage('system', chalk.yellow('Usage: /payment [enable|disable|token <T>|mode <M>]'));
+  ctx.appendMessage('system', chalk.yellow('Usage: /payment [enable|disable|token <TOKEN>|mode <pay_per_request|debt_accumulation>]'));
   return { handled: true };
 }
 
@@ -889,6 +1140,9 @@ export async function processCommand(input, ctx) {
   switch (cmd) {
     case '/help':
       return cmdHelp(ctx);
+
+    case '/profile':
+      return cmdProfile(args, ctx);
 
     case '/plugins':
       return cmdPlugins(ctx);
