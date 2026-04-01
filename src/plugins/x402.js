@@ -29,7 +29,7 @@ import fs from 'fs';
 import { ensureProfileDir, getProfilePaths } from '../profile.js';
 
 const XGATE_BASE = 'https://api.xgate.run';
-const DEFAULT_HUSTLE_URL = 'https://agenthustle.ai';
+const DEFAULT_HUSTLE_URL = 'https://emblemvault.ai';
 
 function getFavoritesFile() {
   return getProfilePaths().x402Favorites;

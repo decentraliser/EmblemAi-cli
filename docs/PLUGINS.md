@@ -80,7 +80,7 @@ Manage favorite x402 services.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `X402_HUSTLE_URL` | Override Hustle server URL for auth passthrough | `https://agenthustle.ai` |
+| `X402_HUSTLE_URL` | Override EmblemAI server URL for auth passthrough | `https://emblemvault.ai` |
 
 #### Signing Architecture
 
