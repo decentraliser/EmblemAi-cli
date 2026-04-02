@@ -25,9 +25,10 @@ import os from 'os';
 import readline from 'readline';
 import chalk from 'chalk';
 import { getPassword, getCredential, authenticate, webLogin, promptPassword, authMenu, readPluginSecrets, migrateLegacyCredentials } from './src/auth.js';
-import { saveSession } from './src/session-store.js';
+import { loadSessionPreferences, saveSession, saveSessionPreferences } from './src/session-store.js';
 import { processCommand } from './src/commands.js';
 import { PluginManager } from './src/plugins/loader.js';
+import { createModelSelection, getDefaultModelChoice, getDefaultModelChoices, resolveModelId } from './src/models.js';
 import {
   DEFAULT_PROFILE,
   createProfile,
@@ -45,6 +46,7 @@ import {
   setCurrentProfile,
 } from './src/profile.js';
 import * as glow from './src/glow.js';
+import { describeConfiguredModel, getModelDisplayLabel, getModelFriendlyName } from './src/models.js';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { version: PKG_VERSION } = require('./package.json');
@@ -262,6 +264,7 @@ function migrateHistory(vaultId) {
 }
 
 function formatProfileInspection(info) {
+  const activeModel = describeConfiguredModel(info.model?.id, info.model?.label);
   const lines = [
     chalk.bold.white(`Profile: ${info.name}`),
     '',
@@ -270,6 +273,7 @@ function formatProfileInspection(info) {
     `  ${chalk.dim('Purpose:')}       ${info.metadata?.purpose || chalk.dim('—')}`,
     `  ${chalk.dim('Created:')}       ${info.metadata?.createdAt || 'N/A'}`,
     `  ${chalk.dim('Path:')}          ${info.path}`,
+    `  ${chalk.dim('Model:')}         ${getModelDisplayLabel(activeModel)} ${chalk.dim(`(${activeModel.id})`)}${activeModel.isDefault ? chalk.dim(' (default)') : ''}`,
     `  ${chalk.dim('Session Vault:')} ${info.session?.vaultId || 'N/A'}`,
     `  ${chalk.dim('Session Auth:')}  ${info.session?.authType || 'N/A'}`,
     `  ${chalk.dim('Credentials:')}   ${info.files.env ? chalk.green('present') : chalk.dim('missing')}`,
@@ -311,7 +315,9 @@ async function handleProfileCliCommand(activeProfile) {
     for (const profile of profiles) {
       const badge = profile.active ? chalk.dim(' [default]') : '';
       const vault = profile.session?.vaultId ? chalk.dim(` · ${profile.session.vaultId}`) : '';
-      console.log(`  ${chalk.white(profile.name)}${badge}${vault}`);
+      const activeModel = describeConfiguredModel(profile.model?.id, profile.model?.label);
+      const modelText = `${getModelDisplayLabel(activeModel)} ${chalk.dim(`(${activeModel.id})`)}${activeModel.isDefault ? chalk.dim(' (default)') : ''}`;
+      console.log(`  ${chalk.white(profile.name)}${badge}${chalk.dim(' · ')}${modelText}${vault}`);
     }
     return 0;
   }
@@ -489,6 +495,28 @@ async function authenticateInteractiveProfile(config = {}) {
   return { authSdk: authResult.authSdk, source: 'password' };
 }
 
+function getSavedModelPreference() {
+  const preferences = loadSessionPreferences();
+  return createModelSelection({
+    id: preferences?.model,
+    label: preferences?.modelLabel,
+  });
+}
+
+const PROMPT_MODEL_SEPARATORS = ['·', '•', '●', '•'];
+let promptSeparatorFrame = 0;
+
+function truncatePromptSegment(value, maxLength = 24) {
+  if (!value || value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 1)}…`;
+}
+
+function getPromptModelLabel(settings) {
+  const activeModel = describeConfiguredModel(settings.model, settings.modelLabel);
+  const label = getModelFriendlyName(activeModel);
+  return truncatePromptSegment(label, 22);
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -664,7 +692,13 @@ async function main() {
       stream: !initialStream ? true : initialStream,
       retainHistory: true,
       selectedTools: [],
-      model: null,
+      ...(() => {
+        const savedModel = getSavedModelPreference();
+        return {
+          model: savedModel.id,
+          modelLabel: savedModel.label,
+        };
+      })(),
       glowEnabled: glow.detectGlow().installed,
       log: initialLog,
     };
@@ -698,8 +732,9 @@ async function main() {
 
       try {
         history.messages.push({ role: 'user', content: messageArg });
-        const res = await client.chat(buildMessages(history.messages, pluginManager), { rawResponse: false });
-        const response = /** @type {import('hustle-incognito').ProcessedResponse} */ (res);
+        const response = settings.model
+          ? await client.chat(buildMessages(history.messages, pluginManager), { rawResponse: false, model: settings.model })
+          : await client.chat(buildMessages(history.messages, pluginManager), { rawResponse: false });
         clearInterval(progressInterval);
         console.log('');
         history.messages.push({ role: 'assistant', content: response.content });
@@ -764,6 +799,9 @@ async function main() {
 
     // Show settings
     console.log(chalk.dim(`  Streaming: ${settings.stream ? 'enabled' : 'disabled'}`));
+    const defaultModel = getDefaultModelChoice();
+    const modelLabel = settings.modelLabel ? `${settings.modelLabel} ` : '';
+    console.log(chalk.dim(`  Model: ${modelLabel}${settings.model}${settings.model === defaultModel.id ? ' (default)' : ''}`));
     if (settings.glowEnabled) console.log(chalk.dim('  Glow: enabled (markdown rendering)'));
     console.log('');
     console.log(chalk.dim('  Type /help for commands, /exit to quit.\n'));
@@ -775,7 +813,7 @@ async function main() {
       output: process.stdout,
       completer: (line) => {
         const cmds = ['/help', '/profile', '/plugins', '/tools', '/auth', '/wallet',
-          '/portfolio', '/model', '/stream', '/debug', '/history', '/payment',
+          '/portfolio', '/model', '/models', '/stream', '/debug', '/history', '/payment',
           '/secrets', '/glow', '/log', '/reset', '/exit', '/settings'];
         const hits = cmds.filter(c => c.startsWith(line));
         return [hits.length ? hits : cmds, line];
@@ -788,7 +826,11 @@ async function main() {
       const profileLabel = nextProfile && nextProfile !== sessionProfile
         ? `${sessionProfile}→${nextProfile}`
         : sessionProfile;
-      const promptLabel = chalk.cyan('emblem') + chalk.dim(`[${profileLabel}]`) + chalk.cyan('> ');
+      const modelLabel = ctx?.settings ? getPromptModelLabel(ctx.settings) : null;
+      const separator = PROMPT_MODEL_SEPARATORS[promptSeparatorFrame % PROMPT_MODEL_SEPARATORS.length];
+      promptSeparatorFrame += 1;
+      const suffix = modelLabel ? ` ${chalk.dim(separator)} ${chalk.white(modelLabel)}` : '';
+      const promptLabel = chalk.cyan('emblem') + chalk.dim(`[${profileLabel}${suffix}]`) + chalk.cyan('> ');
       rl.question(promptLabel, resolveInput);
     });
 
@@ -829,12 +871,17 @@ async function main() {
           client = new HustleIncognitoClient(nextClientConfig);
 
           pluginManager = new PluginManager(client);
-          const nextPluginSecrets = readPluginSecrets();
-          await pluginManager.loadAll(pluginConfig, { authSdk, credentials: { secrets: nextPluginSecrets } });
+        const nextPluginSecrets = readPluginSecrets();
+        await pluginManager.loadAll(pluginConfig, { authSdk, credentials: { secrets: nextPluginSecrets } });
 
-          history = loadHistory(nextVaultId);
-          setActiveProfile(name);
-          defaultProfileName = name;
+        history = loadHistory(nextVaultId);
+        {
+          const savedModel = getSavedModelPreference();
+          settings.model = savedModel.id;
+          settings.modelLabel = savedModel.label;
+        }
+        setActiveProfile(name);
+        defaultProfileName = name;
 
           ctx.authSdk = authSdk;
           ctx.client = client;
@@ -871,6 +918,19 @@ async function main() {
       appendMessage: (_role, content) => console.log(content),
       updateSidebar: () => {},
       log, logOpen, logClose, LOG_FILE,
+      setModel: async (model) => {
+        const selection = createModelSelection(
+          typeof model === 'string'
+            ? { id: model }
+            : model
+        );
+        settings.model = selection.id;
+        settings.modelLabel = selection.label;
+        saveSessionPreferences({ model: settings.model, modelLabel: settings.modelLabel });
+      },
+      defaultModels: getDefaultModelChoices(),
+      lastModelSearchResults: [],
+      cachedOpenRouterModels: null,
     };
 
     // ── Chat Loop ─────────────────────────────────────────────────────────

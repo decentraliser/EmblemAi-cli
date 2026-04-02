@@ -142,7 +142,7 @@ emblemai -a -m "What is my SOL balance?" | jq .
 ADDRESSES=$(emblemai -a -m "List my addresses as JSON")
 ```
 
-Agent mode always uses password auth (never browser auth), retains conversation history between calls, and supports the full Hustle AI toolset including trading, transfers, portfolio queries, and cross-chain operations.
+Agent mode always uses password auth (never browser auth), retains conversation history between calls, and supports the full EmblemAI toolset including trading, transfers, portfolio queries, and cross-chain operations.
 
 #### Multiple agents using the same CLI instance
 Session data is stored in `$HOME/.emblemai/` and is shared across all invocations of the CLI.
@@ -255,7 +255,9 @@ emblemai --reset
 | `/wallet` | Show wallet addresses |
 | `/portfolio` | Show portfolio |
 | `/settings` | Show current settings |
-| `/model <id>` | Set AI model (or `clear` to reset) |
+| `/model <id>` | Set AI model (or `clear` to reset to the CLI default) |
+| `/models` | Show current model and curated defaults |
+| `/models search <query>` | Fuzzy-search OpenRouter models |
 | `/stream on\|off` | Toggle streaming |
 | `/debug on\|off` | Toggle debug mode |
 | `/history on\|off` | Toggle history retention |
@@ -332,10 +334,10 @@ The x402 plugin lets your agent discover and pay for services across the x402 ec
 emblemai --agent -m "Use x402_search to find trending token services"
 
 # Call a paid API with automatic payment
-emblemai --agent -m "Use x402_call to call https://agenthustle.ai/api/tools/execute/unified/currentUnixTimestamp"
+emblemai --agent -m "Use x402_call to call https://emblemvault.ai/api/tools/execute/unified/currentUnixTimestamp"
 
 # Prefer a specific payment network
-emblemai --agent -m "Use x402_call to call https://agenthustle.ai/api/tools/execute/unified/birdeyeTrendingTokens with preferredNetwork solana"
+emblemai --agent -m "Use x402_call to call https://emblemvault.ai/api/tools/execute/unified/birdeyeTrendingTokens with preferredNetwork solana"
 ```
 
 The plugin provides 5 tools:
@@ -374,5 +376,5 @@ Solana, Ethereum, Base, BSC, Polygon, Hedera, Bitcoin
 ## Links
 
 - [EmblemVault](https://emblemvault.dev)
-- [Hustle AI](https://agenthustle.ai)
+- [EmblemAI](https://emblemvault.ai)
 - [GitHub](https://github.com/EmblemCompany/EmblemAi-AgentWallet)
