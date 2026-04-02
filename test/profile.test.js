@@ -14,6 +14,8 @@ const CLI_PATH = path.join(REPO_ROOT, 'emblemai.js');
 
 const profile = await import('../src/profile.js');
 const { processCommand } = await import('../src/commands.js');
+const sessionStore = await import('../src/session-store.js');
+const modelHelpers = await import('../src/models.js');
 
 const EMBLEMAI_DIR = path.join(TEST_HOME, '.emblemai');
 const LEGACY_PLUGINS_FILE = path.join(TEST_HOME, '.emblemai-plugins.json');
@@ -49,12 +51,14 @@ function makeCtx(overrides = {}) {
     settings: {
       selectedTools: [],
       model: null,
+      modelLabel: null,
       stream: true,
       debug: false,
       retainHistory: true,
       glowEnabled: true,
       log: false,
     },
+    lastModelSearchResults: [],
     client: {
       async getPaygStatus() {
         return {
@@ -78,6 +82,10 @@ function makeCtx(overrides = {}) {
     appendMessage: (_role, content) => outputs.push(content),
     addLog: () => {},
     promptText: async () => 'n',
+    setModel: async (model) => {
+      ctx.settings.model = model.id;
+      ctx.settings.modelLabel = model.label;
+    },
     ...overrides,
   };
 
@@ -188,6 +196,11 @@ test('profile commands switch the live session profile', async () => {
   });
   profile.createProfile('treasury');
   profile.setActiveProfile('default');
+  sessionStore.saveSessionPreferences({ model: 'openai/gpt-4.1', modelLabel: 'OpenAI: GPT-4.1' });
+
+  profile.setCurrentProfile('treasury');
+  sessionStore.saveSessionPreferences({ model: 'qwen/qwen3.6-plus-preview:free', modelLabel: 'Qwen: Qwen3.6 Plus Preview (free)' });
+  profile.setCurrentProfile('default');
 
   const { ctx, outputs } = makeCtx();
   ctx.switchProfile = async (name) => {
@@ -208,9 +221,12 @@ test('profile commands switch the live session profile', async () => {
   const joined = stripAnsi(outputs.join('\n---\n'));
 
   assert.match(joined, /default \[current, default\]/);
+  assert.match(joined, /default \[current, default\] · OpenAI: GPT-4\.1 \(openai\/gpt-4\.1\)/);
   assert.match(joined, /Switched this session and new sessions to profile "treasury"\./);
   assert.match(joined, /Profile: default \[current, default\]/);
   assert.match(joined, /Profile: treasury \[current, default\]/);
+  assert.match(joined, /Model:\s+OpenAI: GPT-4\.1 \(openai\/gpt-4\.1\)/);
+  assert.match(joined, /Model:\s+Qwen: Qwen3\.6 Plus Preview \(free\) \(qwen\/qwen3\.6-plus-preview:free\)/);
   assert.match(joined, /This Session:\s+YES/);
   assert.doesNotMatch(joined, /Profile Drift:/);
   assert.match(joined, /Session Profile:\s+treasury/);
@@ -234,6 +250,150 @@ test('payment help and status explain debt_accumulation and token behavior', asy
   assert.match(joined, /pay_per_request:\s+Settle each paid request immediately\./);
   assert.match(joined, /debt_accumulation:\s+Allow debt to build up until the server-side ceiling is reached\./);
   assert.match(joined, /Payment mode set to: debt_accumulation/);
+});
+
+test('model preferences persist in session store without losing auth session', () => {
+  const authSession = {
+    authToken: 'token-123',
+    user: { vaultId: 'vault-123', identifier: 'user-123' },
+    expiresAt: Date.now() + 60_000,
+  };
+
+  sessionStore.saveSession(authSession);
+  sessionStore.saveSessionPreferences({ model: 'openai/gpt-4.1' });
+
+  const storedSession = sessionStore.loadSession();
+  const storedPreferences = sessionStore.loadSessionPreferences();
+
+  assert.equal(storedSession.authToken, 'token-123');
+  assert.equal(storedPreferences.model, 'openai/gpt-4.1');
+
+  sessionStore.clearSession();
+
+  assert.equal(sessionStore.loadSession(), null);
+  assert.equal(sessionStore.loadSessionPreferences().model, 'openai/gpt-4.1');
+});
+
+test('model helpers format price, trim descriptions, and build openrouter urls', () => {
+  const model = {
+    id: 'deepseek/deepseek-v3.2',
+    canonical_slug: 'deepseek/deepseek-v3.2',
+    pricing: { prompt: '0.00000026', completion: '0.00000038' },
+    description: 'x'.repeat(260),
+  };
+
+  const normalized = {
+    id: model.id,
+    canonicalSlug: model.canonical_slug,
+    promptPrice: Number(model.pricing.prompt),
+    completionPrice: Number(model.pricing.completion),
+    url: modelHelpers.getOpenRouterModelUrl(model),
+    description: model.description,
+  };
+
+  assert.equal(modelHelpers.getOpenRouterModelUrl(model), 'https://openrouter.ai/deepseek/deepseek-v3.2');
+  assert.equal(modelHelpers.formatModelPrice(normalized), '$0.26/M in · $0.38/M out');
+  assert.equal(modelHelpers.trimModelDescription(normalized.description, 200).length, 200);
+});
+
+test('model commands update the active model and show default choices', async () => {
+  const { ctx, outputs } = makeCtx();
+
+  await processCommand('/models', ctx);
+  await processCommand('/model', ctx);
+  await processCommand('/models use 2', ctx);
+  await processCommand('/model', ctx);
+  await processCommand('/model clear', ctx);
+  await processCommand('/model', ctx);
+
+  const joined = stripAnsi(outputs.join('\n---\n'));
+
+  assert.match(joined, /Model Selection/);
+  assert.match(joined, /Default Models/);
+  assert.match(joined, /Anthropic: Claude Sonnet 4\.6/);
+  assert.match(joined, /Search OpenRouter with \/models search <query>\./);
+  assert.match(joined, /https:\/\/openrouter\.ai\/anthropic\/claude.*sonnet/);
+  assert.match(joined, /Current model:\s+Anthropic: Claude Sonnet 4\.6 \(anthropic\/claude-sonnet-4\.6\) \(default\)/);
+  assert.match(joined, /Model set to: anthropic\/claude-opus-4\.6 \(Anthropic: Claude Opus 4\.6\)/);
+  assert.match(joined, /Current model:\s+Anthropic: Claude Opus 4\.6 \(anthropic\/claude-opus-4\.6\)/);
+  assert.match(joined, /Model reset to default: anthropic\/claude-sonnet-4\.6/);
+  assert.match(joined, /Current model:\s+Anthropic: Claude Sonnet 4\.6 \(anthropic\/claude-sonnet-4\.6\) \(default\)/);
+});
+
+test('model command resolves numeric selection from the last search results and shows its label', async () => {
+  const { ctx, outputs } = makeCtx({
+    settings: {
+      selectedTools: [],
+      model: 'openai/gpt-4.1',
+      modelLabel: 'OpenAI: GPT-4.1',
+      stream: true,
+      debug: false,
+      retainHistory: true,
+      glowEnabled: true,
+      log: false,
+    },
+    lastModelSearchResults: [
+      { id: 'qwen/qwen-plus', label: 'Qwen: Qwen-Plus' },
+      { id: 'qwen/qwen-plus-2025-07-28', label: 'Qwen: Qwen Plus 0728' },
+      { id: 'qwen/qwen-plus-2025-07-28:thinking', label: 'Qwen: Qwen Plus 0728 (thinking)' },
+      { id: 'qwen/qwen3-coder-flash', label: 'Qwen: Qwen3 Coder Flash' },
+      { id: 'qwen/qwen3-coder-plus', label: 'Qwen: Qwen3 Coder Plus' },
+      { id: 'qwen/qwen3.6-plus-preview:free', label: 'Qwen: Qwen3.6 Plus Preview (free)' },
+    ],
+  });
+
+  await processCommand('/model 6', ctx);
+  await processCommand('/model', ctx);
+
+  const joined = stripAnsi(outputs.join('\n---\n'));
+
+  assert.match(joined, /Model set to: qwen\/qwen3\.6-plus-preview:free \(Qwen: Qwen3\.6 Plus Preview \(free\)\)/);
+  assert.match(joined, /Current model:\s+Qwen: Qwen3\.6 Plus Preview \(free\) \(qwen\/qwen3\.6-plus-preview:free\)/);
+});
+
+test('model command can surface ambiguous exotic matches and then switch by number', async () => {
+  const { ctx, outputs } = makeCtx({
+    settings: {
+      selectedTools: [],
+      model: 'openai/gpt-4.1',
+      modelLabel: 'OpenAI: GPT-4.1',
+      stream: true,
+      debug: false,
+      retainHistory: true,
+      glowEnabled: true,
+      log: false,
+    },
+    client: {
+      async getPaygStatus() {
+        return {
+          enabled: true,
+          mode: 'debt_accumulation',
+          payment_token: 'SOL',
+          payment_chain: 'solana',
+          is_blocked: false,
+          total_debt_usd: 0,
+          total_paid_usd: 0,
+          debt_ceiling_usd: 100,
+          pending_charges: 0,
+          available_tokens: ['SOL'],
+        };
+      },
+      async configurePayg() {
+        return { success: true };
+      },
+    },
+  });
+
+  await processCommand('/model deepseek', ctx);
+  await processCommand('/model 1', ctx);
+  await processCommand('/model', ctx);
+
+  const joined = stripAnsi(outputs.join('\n---\n'));
+
+  assert.match(joined, /Multiple models matched "deepseek"/);
+  assert.match(joined, /Pick one with \/model <number\|id>\./);
+  assert.match(joined, /Model set to: .+\(.*DeepSeek.*\)/);
+  assert.match(joined, /Current model:\s+.*DeepSeek.*\(.+\)/);
 });
 
 test('agent mode requires --profile when more than one profile exists', () => {

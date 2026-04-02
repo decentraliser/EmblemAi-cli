@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { createModelSelection } from './models.js';
 
 export const EMBLEMAI_ROOT = path.join(os.homedir(), '.emblemai');
 export const PROFILES_DIR = path.join(EMBLEMAI_ROOT, 'profiles');
@@ -423,6 +424,11 @@ export function inspectProfile(profileName) {
     ? fs.readdirSync(paths.historyDir).filter((entry) => entry.endsWith('.json')).length
     : 0;
 
+  const model = createModelSelection({
+    id: stored?.preferences?.model,
+    label: stored?.preferences?.modelLabel,
+  });
+
   return {
     name,
     path: paths.profile,
@@ -445,6 +451,7 @@ export function inspectProfile(profileName) {
       x402Favorites: fs.existsSync(paths.x402Favorites),
       history: fs.existsSync(paths.historyDir),
     },
+    model,
     historyCount,
     active: name === resolveConfiguredProfileName(),
   };

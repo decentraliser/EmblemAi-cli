@@ -255,7 +255,9 @@ emblemai --reset
 | `/wallet` | Show wallet addresses |
 | `/portfolio` | Show portfolio |
 | `/settings` | Show current settings |
-| `/model <id>` | Set AI model (or `clear` to reset) |
+| `/model <id>` | Set AI model (or `clear` to reset to the CLI default) |
+| `/models` | Show current model and curated defaults |
+| `/models search <query>` | Fuzzy-search OpenRouter models |
 | `/stream on\|off` | Toggle streaming |
 | `/debug on\|off` | Toggle debug mode |
 | `/history on\|off` | Toggle history retention |

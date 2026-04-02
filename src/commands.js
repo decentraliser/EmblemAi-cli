@@ -15,6 +15,20 @@ import {
   resolveProfile,
   setActiveProfile,
 } from './profile.js';
+import {
+  createModelSelection,
+  describeConfiguredModel,
+  fetchOpenRouterModels,
+  formatContextLength,
+  formatModelPrice,
+  getDefaultModelId,
+  getDefaultModelChoices,
+  getModelDisplayLabel,
+  getOpenRouterModelUrl,
+  resolveModelId,
+  searchOpenRouterModels,
+  trimModelDescription,
+} from './models.js';
 
 // ============================================================================
 // Command Registry (for /help display)
@@ -34,6 +48,8 @@ export const COMMANDS = [
   { cmd: '/portfolio', desc: 'Show portfolio' },
   { cmd: '/settings', desc: 'Show current settings' },
   { cmd: '/model <id>', desc: 'Set model (or "clear")' },
+  { cmd: '/models', desc: 'Show current model and default choices' },
+  { cmd: '/models search <query>', desc: 'Fuzzy-search OpenRouter models' },
   { cmd: '/stream on|off', desc: 'Toggle streaming' },
   { cmd: '/debug on|off', desc: 'Toggle debug mode' },
   { cmd: '/history on|off', desc: 'Toggle history' },
@@ -99,6 +115,7 @@ function formatProfileDetails(info, ctx, runtimeVaultInfo = null) {
     `  ${chalk.dim('Purpose:')}       ${info.metadata?.purpose || chalk.dim('—')}`,
     `  ${chalk.dim('Created:')}       ${info.metadata?.createdAt || 'N/A'}`,
     `  ${chalk.dim('Path:')}          ${info.path}`,
+    `  ${chalk.dim('Model:')}         ${formatActiveModel(describeConfiguredModel(info.model?.id, info.model?.label))}`,
     `  ${chalk.dim('Session Vault:')} ${info.session?.vaultId || 'N/A'}`,
     `  ${chalk.dim('Session Auth:')}  ${info.session?.authType || 'N/A'}`,
     `  ${chalk.dim('Credentials:')}   ${info.files.env ? chalk.green('present') : chalk.dim('missing')}`,
@@ -142,7 +159,8 @@ async function cmdProfile(args, ctx) {
       chalk.dim('─'.repeat(40)),
       ...profiles.map((profile) => {
         const vault = profile.session?.vaultId ? chalk.dim(` · ${profile.session.vaultId}`) : '';
-        return `  ${chalk.white(profile.name)}${formatProfileBadges(ctx, profile.name)}${vault}`;
+        const model = formatActiveModel(describeConfiguredModel(profile.model?.id, profile.model?.label));
+        return `  ${chalk.white(profile.name)}${formatProfileBadges(ctx, profile.name)}${chalk.dim(' · ')}${model}${vault}`;
       }),
       '',
       chalk.dim('  current = this shell · default = new shells'),
@@ -506,6 +524,7 @@ function cmdPortfolio() {
 
 function cmdSettings(ctx) {
   const sess = ctx.authSdk.getSession();
+  const activeModel = describeConfiguredModel(ctx.settings.model, ctx.settings.modelLabel);
   const lines = [
     chalk.bold.white('Current Settings'),
     '',
@@ -514,7 +533,7 @@ function cmdSettings(ctx) {
     `  ${chalk.dim('App ID:')}       emblem-agent-wallet`,
     `  ${chalk.dim('Vault ID:')}     ${sess?.user?.vaultId || 'N/A'}`,
     `  ${chalk.dim('Auth Mode:')}    Password (headless)`,
-    `  ${chalk.dim('Model:')}        ${ctx.settings.model || chalk.dim('API default')}`,
+    `  ${chalk.dim('Model:')}        ${formatActiveModel(activeModel)}`,
     `  ${chalk.dim('Streaming:')}    ${ctx.settings.stream ? chalk.green('ON') : chalk.red('OFF')}`,
     `  ${chalk.dim('Debug:')}        ${ctx.settings.debug ? chalk.green('ON') : chalk.red('OFF')}`,
     `  ${chalk.dim('History:')}      ${ctx.settings.retainHistory ? chalk.green('ON') : chalk.red('OFF')}`,
@@ -528,27 +547,269 @@ function cmdSettings(ctx) {
   return { handled: true };
 }
 
-function cmdModel(args, ctx) {
+function describeCurrentModel(ctx) {
+  const activeModel = describeConfiguredModel(ctx.settings.model, ctx.settings.modelLabel);
+  return formatActiveModel(activeModel);
+}
+
+function formatActiveModel(model) {
+  const label = getModelDisplayLabel(model);
+  if (label && label !== model.id) {
+    return `${chalk.white(label)} ${chalk.dim(`(${model.id})`)}${model.isDefault ? chalk.dim(' (default)') : ''}`;
+  }
+  return chalk.white(model.id) + (model.isDefault ? chalk.dim(' (default)') : '');
+}
+
+function rememberModelResults(ctx, models) {
+  ctx.lastModelSearchResults = models.map((model) => createModelSelection(model));
+}
+
+function resolveModelSelection(ctx, selection) {
+  const recentResults = Array.isArray(ctx.lastModelSearchResults) ? ctx.lastModelSearchResults : [];
+  const numericSelection = /^\d+$/.test(selection) ? Number.parseInt(selection, 10) : null;
+
+  if (numericSelection !== null) {
+    return recentResults[numericSelection - 1] || null;
+  }
+
+  return recentResults.find((model) => model.id === selection) || null;
+}
+
+async function resolveModelSelectionFromQuery(ctx, selection) {
+  const recentSelection = resolveModelSelection(ctx, selection);
+  if (recentSelection) return recentSelection;
+
+  const normalized = selection.trim();
+  if (!normalized) return null;
+
+  const exactDefault = getDefaultModelChoices().find((model) => model.id === normalized);
+  if (exactDefault) return createModelSelection(exactDefault);
+
+  const defaultMatches = searchOpenRouterModels(normalized, getDefaultModelChoices(), 1);
+  if (defaultMatches.length > 0) return createModelSelection(defaultMatches[0]);
+
+  const openRouterModels = await fetchOpenRouterModels();
+  const exactOpenRouter = openRouterModels.find((model) => model.id === normalized);
+  if (exactOpenRouter) return createModelSelection(exactOpenRouter);
+
+  const matches = searchOpenRouterModels(normalized, openRouterModels, 5);
+  rememberModelResults(ctx, matches);
+
+  if (matches.length === 1) {
+    return createModelSelection(matches[0]);
+  }
+
+  if (matches.length > 1) {
+    const lines = [
+      '',
+      chalk.bold.white(`Multiple models matched "${normalized}"`),
+      '',
+      ...matches.map((model, index) => formatModelCatalogLine(index + 1, {
+        ...model,
+        activeModelId: resolveModelId(ctx.settings.model),
+      }, { source: 'openrouter' })),
+      '',
+      chalk.dim('Pick one with /model <number|id>.'),
+      '',
+    ];
+    ctx.appendMessage('system', lines.join('\n'));
+    return null;
+  }
+
+  return createModelSelection({ id: resolveModelId(normalized) });
+}
+
+function formatModelCatalogLine(index, model, { source = null } = {}) {
+  const prefix = index == null ? '  •' : `  ${chalk.cyan(`${index}.`)}`;
+  const activeBadge = model.id === model.activeModelId ? ` ${chalk.green('[active]')}` : '';
+  const sourceBadge = source ? ` ${chalk.dim(`[${source}]`)}` : '';
+  const priceBadge = formatModelPrice(model) ? ` ${chalk.dim(`· ${formatModelPrice(model)}`)}` : '';
+  const contextBadge = model.contextLength ? ` ${chalk.dim(`· ${formatContextLength(model.contextLength)} ctx`)}` : '';
+  const toolsBadge = model.supportsTools ? ` ${chalk.dim('· tools')}` : '';
+  const url = model.url || getOpenRouterModelUrl(model);
+  const description = trimModelDescription(model.notes || model.description, 200);
+
+  const lines = [
+    `${prefix} ${chalk.white(getModelDisplayLabel(model))} ${chalk.dim(`(${model.id})`)}${activeBadge}${sourceBadge}${priceBadge}${contextBadge}${toolsBadge}`,
+  ];
+
+  if (description) {
+    lines.push(`     ${chalk.dim(description)}`);
+  }
+
+  if (url) {
+    lines.push(`     ${chalk.cyan(url)}`);
+  }
+
+  return lines.join('\n');
+}
+
+function renderDefaultModels(ctx) {
+  const defaults = getDefaultModelChoices(ctx.cachedOpenRouterModels).map((model) => ({
+    ...model,
+    activeModelId: resolveModelId(ctx.settings.model),
+  }));
+
+  const lines = [
+    '',
+    chalk.bold.white('Model Selection'),
+    '',
+    `${chalk.dim('Current model:')} ${describeCurrentModel(ctx)}`,
+    '',
+    chalk.bold.white('Default Models'),
+    chalk.dim('Pick with /models use <number> or /model <id>.'),
+    '',
+    ...defaults.map((model, index) => formatModelCatalogLine(index + 1, model, { source: 'default' })),
+    '',
+    chalk.dim('Search OpenRouter with /models search <query>.'),
+    chalk.dim('Reset with /model clear.'),
+    '',
+  ];
+
+  return { lines, defaults };
+}
+
+async function persistModelSelection(ctx, modelId) {
+  const selection = typeof modelId === 'string'
+    ? createModelSelection({ id: modelId })
+    : createModelSelection(modelId);
+
+  if (typeof ctx.setModel !== 'function') {
+    ctx.settings.model = selection.id;
+    ctx.settings.modelLabel = selection.label;
+    return;
+  }
+  await ctx.setModel(selection);
+}
+
+async function cmdModel(args, ctx) {
   const modelArg = args.trim();
 
   // /model — show current
   if (!modelArg) {
-    ctx.appendMessage('system', `${chalk.dim('Current model:')} ${ctx.settings.model || chalk.dim('API default')}`);
+    ctx.appendMessage('system', `${chalk.dim('Current model:')} ${describeCurrentModel(ctx)}`);
     return { handled: true };
   }
 
   // /model clear
   if (modelArg === 'clear') {
-    ctx.settings.model = null;
-    ctx.appendMessage('system', chalk.green('Model selection cleared. Using API default.'));
-    ctx.addLog('model', 'Cleared model');
+    const defaultModelId = getDefaultModelId();
+    await persistModelSelection(ctx, defaultModelId);
+    ctx.appendMessage('system', chalk.green(`Model reset to default: ${defaultModelId}`));
+    ctx.addLog('model', `Reset to default ${defaultModelId}`);
     return { handled: true };
   }
 
   // /model <id>
-  ctx.settings.model = modelArg;
-  ctx.appendMessage('system', chalk.green(`Model set to: ${modelArg}`));
-  ctx.addLog('model', `Set to ${modelArg}`);
+  if (/^\d+$/.test(modelArg) && !resolveModelSelection(ctx, modelArg)) {
+    ctx.appendMessage('system', chalk.yellow(`No recent model result #${modelArg}. Run /models or /models search <query> first.`));
+    return { handled: true };
+  }
+
+  const nextSelection = await resolveModelSelectionFromQuery(ctx, modelArg);
+  if (!nextSelection) {
+    return { handled: true };
+  }
+  await persistModelSelection(ctx, nextSelection);
+  ctx.appendMessage(
+    'system',
+    chalk.green(`Model set to: ${nextSelection.id}`) +
+      (nextSelection.label ? chalk.dim(` (${nextSelection.label})`) : '')
+  );
+  ctx.addLog('model', `Set to ${nextSelection.id}`);
+  return { handled: true };
+}
+
+async function cmdModels(args, ctx) {
+  const parts = args.trim().split(/\s+/).filter(Boolean);
+  const sub = (parts[0] || '').toLowerCase();
+
+  if (parts.length === 0) {
+    if (!ctx.cachedOpenRouterModels) {
+      try {
+        ctx.cachedOpenRouterModels = await fetchOpenRouterModels();
+      } catch {
+        // Fall back to local defaults without prices if OpenRouter is unavailable.
+      }
+    }
+    const { lines, defaults } = renderDefaultModels(ctx);
+    rememberModelResults(ctx, defaults);
+    ctx.appendMessage('system', lines.join('\n'));
+    return { handled: true };
+  }
+
+  if (sub === 'use') {
+    const selection = parts[1];
+    const { defaults } = renderDefaultModels(ctx);
+
+    if (!selection) {
+      ctx.appendMessage('system', chalk.yellow('Usage: /models use <number|id>'));
+      return { handled: true };
+    }
+
+    const numericIndex = Number.parseInt(selection, 10);
+    const selectedByIndex = Number.isInteger(numericIndex) && numericIndex >= 1 && numericIndex <= defaults.length
+      ? defaults[numericIndex - 1]
+      : null;
+    const selectedModel = selectedByIndex || defaults.find((model) => model.id === selection) || null;
+
+    if (!selectedModel) {
+      ctx.appendMessage('system', chalk.red(`Unknown default model: ${selection}`));
+      return { handled: true };
+    }
+
+    await persistModelSelection(ctx, selectedModel);
+    ctx.appendMessage(
+      'system',
+      chalk.green(`Model set to: ${selectedModel.id}`) +
+        chalk.dim(` (${getModelDisplayLabel(selectedModel)})`)
+    );
+    ctx.addLog('model', `Set to ${selectedModel.id} via /models`);
+    return { handled: true };
+  }
+
+  if (sub === 'search') {
+    const query = parts.slice(1).join(' ');
+    if (!query) {
+      ctx.appendMessage('system', chalk.yellow('Usage: /models search <query>'));
+      return { handled: true };
+    }
+
+    try {
+      const models = await fetchOpenRouterModels();
+      ctx.cachedOpenRouterModels = models;
+      const matches = searchOpenRouterModels(query, models, 8).map((model) => ({
+        ...model,
+        activeModelId: resolveModelId(ctx.settings.model),
+      }));
+
+      if (matches.length === 0) {
+        ctx.appendMessage('system', chalk.yellow(`No OpenRouter models matched "${query}".`));
+        return { handled: true };
+      }
+
+      rememberModelResults(ctx, matches);
+
+      const lines = [
+        '',
+        chalk.bold.white(`OpenRouter Matches for "${query}"`),
+        '',
+        `${chalk.dim('Current model:')} ${describeCurrentModel(ctx)}`,
+        '',
+        ...matches.map((model, index) => formatModelCatalogLine(index + 1, model, { source: 'openrouter' })),
+        '',
+        chalk.dim('Set one with /model <number|id>.'),
+        '',
+      ];
+      ctx.appendMessage('system', lines.join('\n'));
+      ctx.addLog('model', `Searched OpenRouter models for ${query}`);
+    } catch (err) {
+      ctx.appendMessage('system', chalk.red(`Model search failed: ${err.message}`));
+    }
+    return { handled: true };
+  }
+
+  ctx.appendMessage('system', chalk.yellow('Usage: /models [use <number|id>|search <query>]'));
   return { handled: true };
 }
 
@@ -1167,6 +1428,9 @@ export async function processCommand(input, ctx) {
 
     case '/model':
       return cmdModel(args, ctx);
+
+    case '/models':
+      return cmdModels(args, ctx);
 
     case '/stream':
       return cmdStream(args, ctx);
