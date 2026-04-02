@@ -5,6 +5,11 @@ const DEFAULT_MODEL_INDEX = 0;
 
 export const DEFAULT_MODEL_CHOICES = Object.freeze([
   {
+    id: 'moonshotai/kimi-k2.5',
+    label: 'MoonshotAI: Kimi K2.5',
+    notes: 'Great for coding and reasoning, with strong tool use.',
+  },
+  {
     id: 'anthropic/claude-sonnet-4.6',
     label: 'Anthropic: Claude Sonnet 4.6',
     notes: 'Stronger reasoning and tool use, with slightly higher latency.',
@@ -14,37 +19,11 @@ export const DEFAULT_MODEL_CHOICES = Object.freeze([
     label: 'Anthropic: Claude Opus 4.6',
     notes: 'Best for complex reasoning and tool use, with higher latency.',
   },
-  // openai/gpt-5.4
   {
-    id: 'openai/gpt-5.4',
-    label: 'OpenAI: GPT-5.4',
-    notes: 'Latest and greatest from OpenAI, with strong reasoning and tool use.',
-  },
-  {
-    id: 'openai/o3',
-    label: 'OpenAI: o3',
-    notes: 'Best for heavier reasoning and complex workflows.',
-  },
-  {
-    id: 'openai/gpt-4.1',
-    label: 'OpenAI: GPT-4.1',
-    notes: 'Strong default for general chat and tool calling.',
-  },
-  {
-    id: 'google/gemini-2.5-pro',
-    label: 'Google: Gemini 2.5 Pro',
-    notes: 'Long context and multimodal-friendly.',
-  },
-  {
-    id: 'x-ai/grok-4.20',
-    label: 'xAI: Grok 4.20',
+    id: 'x-ai/grok-4.1-fast',
+    label: 'xAI: Grok 4.1 Fast',
     notes: 'Fast agentic workflows with tool support.',
   },
-  {
-    id: 'moonshotai/kimi-k2.5',
-    label: 'MoonshotAI: Kimi K2.5',
-    notes: 'Great for coding and reasoning, with strong tool use.',
-  }
 ]);
 
 let cachedModels = null;
