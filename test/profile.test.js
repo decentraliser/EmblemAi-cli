@@ -314,11 +314,11 @@ test('model commands update the active model and show default choices', async ()
   assert.match(joined, /Anthropic: Claude Sonnet 4\.6/);
   assert.match(joined, /Search OpenRouter with \/models search <query>\./);
   assert.match(joined, /https:\/\/openrouter\.ai\/anthropic\/claude.*sonnet/);
-  assert.match(joined, /Current model:\s+Anthropic: Claude Sonnet 4\.6 \(anthropic\/claude-sonnet-4\.6\) \(default\)/);
-  assert.match(joined, /Model set to: anthropic\/claude-opus-4\.6 \(Anthropic: Claude Opus 4\.6\)/);
-  assert.match(joined, /Current model:\s+Anthropic: Claude Opus 4\.6 \(anthropic\/claude-opus-4\.6\)/);
-  assert.match(joined, /Model reset to default: anthropic\/claude-sonnet-4\.6/);
-  assert.match(joined, /Current model:\s+Anthropic: Claude Sonnet 4\.6 \(anthropic\/claude-sonnet-4\.6\) \(default\)/);
+  assert.match(joined, /Current model:\s+MoonshotAI: Kimi K2\.5 \(moonshotai\/kimi-k2\.5\) \(default\)/);
+  assert.match(joined, /Model set to: anthropic\/claude-sonnet-4\.6 \(Anthropic: Claude Sonnet 4\.6\)/);
+  assert.match(joined, /Current model:\s+Anthropic: Claude Sonnet 4\.6 \(anthropic\/claude-sonnet-4\.6\)/);
+  assert.match(joined, /Model reset to default: moonshotai\/kimi-k2\.5/);
+  assert.match(joined, /Current model:\s+MoonshotAI: Kimi K2\.5 \(moonshotai\/kimi-k2\.5\) \(default\)/);
 });
 
 test('model command resolves numeric selection from the last search results and shows its label', async () => {
