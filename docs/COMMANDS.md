@@ -118,6 +118,40 @@ The x402 plugin provides AI tools (`x402_search`, `x402_agents`, `x402_call`, `x
 "Show x402 ecosystem stats"
 ```
 
+### MPP Payments
+
+| Command | Description |
+|---------|-------------|
+| `/mpp` | Show MPP plugin status, scope, and quick usage |
+| `/mpp call <url> [json-body]` | Call an MPP endpoint with automatic payment handling |
+| `/mpp services [query]` | Browse public MPP services from the official directory |
+| `/mpp service <id\|query>` | Inspect one MPP service and its paid endpoints |
+| `/mpp state` | Show persisted Tempo resume state |
+| `/mpp state clear` | Clear persisted Tempo channel hints for the active profile |
+
+The current MPP client flow follows Stripe's documented `402` challenge → `Authorization: Payment` → `Payment-Receipt` pattern and uses the official `mppx` SDK.
+
+Current scope in this branch:
+
+- Tempo-backed crypto MPP endpoints
+- Public service discovery through `https://mpp.dev/api/services`
+- Persisted Tempo session/channel resume hints per profile
+- Receipt extraction
+
+Current limitations:
+
+- Stripe-backed MPP flows are intentionally removed in this branch
+- No dedicated SSE/streaming helper yet
+
+When reusing Tempo values from `/mpp state` or receipts, prefer the raw-unit fields (`cumulativeAmountRaw`, `additionalDepositRaw`) over the human-unit fields.
+
+Deferred Stripe implementation note:
+
+- The removed Stripe path was callback-based and required a user-supplied SPT mint endpoint
+- The endpoint contract accepted `amount`, `challenge`, `currency`, `expiresAt`, `metadata`, `networkId`, and `paymentMethod`
+- The endpoint response could be a raw token string or JSON with `spt` / `token`
+- Testing required saved endpoint/payment-method defaults plus a Stripe-capable MPP service
+
 ### Secrets
 
 | Command | Description |

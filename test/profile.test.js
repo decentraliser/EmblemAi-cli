@@ -228,6 +228,7 @@ test('profile commands switch the live session profile', async () => {
   assert.match(joined, /Model:\s+OpenAI: GPT-4\.1 \(openai\/gpt-4\.1\)/);
   assert.match(joined, /Model:\s+Qwen: Qwen3\.6 Plus Preview \(free\) \(qwen\/qwen3\.6-plus-preview:free\)/);
   assert.match(joined, /This Session:\s+YES/);
+  assert.match(joined, /MPP State:\s+missing/);
   assert.doesNotMatch(joined, /Profile Drift:/);
   assert.match(joined, /Session Profile:\s+treasury/);
   assert.match(joined, /Default Profile:\s+treasury/);
@@ -394,6 +395,118 @@ test('model command can surface ambiguous exotic matches and then switch by numb
   assert.match(joined, /Pick one with \/model <number\|id>\./);
   assert.match(joined, /Model set to: .+\(.*DeepSeek.*\)/);
   assert.match(joined, /Current model:\s+.*DeepSeek.*\(.+\)/);
+});
+
+test('mpp command advertises scope and executes the MPP plugin', async () => {
+  const { ctx, outputs } = makeCtx({
+    pluginManager: {
+      plugins: new Map([
+        ['hustle-mpp', {
+          enabled: true,
+          plugin: {
+            executors: {
+              async mpp_call({ url, body, paymentMethod }) {
+                return {
+                  ok: true,
+                  status: 200,
+                  url,
+                  paymentMethod: paymentMethod || 'tempo',
+                  method: body ? 'POST' : 'GET',
+                  receipt: {
+                    method: paymentMethod || 'tempo',
+                    status: 'success',
+                    reference: '0xabc',
+                    timestamp: '2026-03-31T00:00:00.000Z',
+                  },
+                  data: body ? JSON.parse(body) : null,
+                };
+              },
+              async mpp_services() {
+                return {
+                  ok: true,
+                  directoryUrl: 'https://mpp.dev/api/services',
+                  count: 1,
+                  services: [
+                    {
+                      id: 'parallel',
+                      name: 'Parallel',
+                      serviceUrl: 'https://parallelmpp.dev',
+                      categories: ['ai', 'search'],
+                      paidEndpointCount: 3,
+                    },
+                  ],
+                };
+              },
+              async mpp_service_info({ id }) {
+                return {
+                  ok: true,
+                  service: {
+                    id,
+                    name: 'Parallel',
+                    serviceUrl: 'https://parallelmpp.dev',
+                    endpoints: [
+                      {
+                        method: 'POST',
+                        path: '/api/search',
+                        payment: {
+                          method: 'tempo',
+                          amount: '1000000',
+                        },
+                      },
+                    ],
+                  },
+                };
+              },
+              async mpp_state() {
+                return {
+                  ok: true,
+                  tempo: {
+                    channels: [
+                      {
+                        channelId: '0xchan',
+                        recipient: '0xpayee',
+                        currency: '0x20c0',
+                        cumulativeAmountRaw: '1000000',
+                      },
+                    ],
+                  },
+                };
+              },
+              async mpp_tempo_clear() {
+                return {
+                  ok: true,
+                  tempo: { channels: [] },
+                };
+              },
+            },
+          },
+        }],
+      ]),
+    },
+  });
+
+  await processCommand('/help', ctx);
+  await processCommand('/mpp', ctx);
+  await processCommand('/mpp services parallel', ctx);
+  await processCommand('/mpp service parallel', ctx);
+  await processCommand('/mpp state', ctx);
+  await processCommand('/mpp call https://parallelmpp.dev/api/search {"query":"agent payments"}', ctx);
+  await processCommand('/mpp state clear', ctx);
+
+  const joined = stripAnsi(outputs.join('\n---\n'));
+
+  assert.match(joined, /\/mpp\s+MPP client plugin — status and paid endpoint calls/);
+  assert.match(joined, /\/mpp services \[query\]\s+Browse public MPP services from the official directory/);
+  assert.match(joined, /MPP Client Plugin/);
+  assert.match(joined, /402 challenge → Authorization: Payment → Payment-Receipt/);
+  assert.match(joined, /Tempo crypto via/);
+  assert.match(joined, /mpp\.dev\/api\/services/);
+  assert.match(joined, /Parallel/);
+  assert.match(joined, /MPP Profile State/);
+  assert.match(joined, /cumulativeRaw/);
+  assert.match(joined, /parallelmpp\.dev\/api\/search/);
+  assert.match(joined, /"reference": "0xabc"/);
+  assert.match(joined, /Cleared persisted Tempo channel hints for the active profile\./);
 });
 
 test('agent mode requires --profile when more than one profile exists', () => {

@@ -47,6 +47,7 @@ EmblemAI now supports multiple named wallet profiles per installation. Each prof
 - browser auth session (`session.json`)
 - plugin secrets (`secrets.json`)
 - custom plugin state (`plugins.json`)
+- MPP state (`mpp-state.json`)
 - x402 favorites (`x402-favorites.json`)
 - chat history (`history/`)
 
@@ -63,6 +64,7 @@ Storage layout:
       .env.keys
       secrets.json
       plugins.json
+      mpp-state.json
       x402-favorites.json
       history/
     treasury/
@@ -318,10 +320,51 @@ Recommended operator habit:
 
 | Plugin | Status | Description |
 |--------|--------|-------------|
+| MPP | Loaded by default | Call Machine Payments Protocol endpoints with the official `402` challenge / `Payment-Receipt` flow via `mppx` |
 | x402 | Loaded by default | Pay-per-call access to 11,000+ paid APIs and AI services via the [x402 protocol](https://x402.org) |
 | ElizaOS | Loaded by default | ElizaOS agent framework with MASQ and inverse discovery |
 
 Additional plugins exist but are currently disabled. See [docs/PLUGINS.md](docs/PLUGINS.md) for details.
+
+### MPP Client Plugin
+
+The MPP plugin lets your agent call payment-gated HTTP endpoints that follow the official Machine Payments Protocol flow described in Stripe's MPP docs: `402` challenge → `Authorization: Payment` → `Payment-Receipt`.
+
+This implementation uses the reference `mppx/client` SDK with Emblem's EVM signer from `@emblemvault/auth-sdk`.
+
+**Current scope**
+
+- Tempo-backed crypto MPP endpoints
+- Public MPP service discovery via `https://mpp.dev/api/services`
+- Profile-scoped Tempo resume hints in `~/.emblemai/profiles/<profile>/mpp-state.json`
+- Receipt extraction from the `Payment-Receipt` header
+
+**Current limitations**
+
+- Stripe-backed MPP flows are intentionally removed from this branch for now
+- No dedicated streaming/SSE helper yet
+
+```bash
+# Call a generic MPP endpoint
+emblemai --agent -m 'Use mpp_call to call https://parallelmpp.dev/api/search with body {"query":"AI agent payments 2026","mode":"fast"}'
+
+# Discover public MPP services
+emblemai --agent -m 'Use mpp_services to list active AI services from the official MPP directory'
+
+# Inspect plugin status interactively
+/mpp
+
+# Inspect persisted Tempo state interactively
+/mpp state
+```
+
+Official references:
+
+- Stripe docs: https://docs.stripe.com/payments/machine/mpp
+- MPP client quickstart: https://mpp.dev/quickstart/client
+- Public service directory: https://mpp.dev/api/services
+
+Deferred Stripe note: the removed Stripe path used callback-based shared payment tokens (SPTs), not local secret-key handling. Re-enabling it would require a user-provided token endpoint that accepts `amount`, `challenge`, `currency`, `expiresAt`, `metadata`, `networkId`, and `paymentMethod`, then returns an SPT as a string body or JSON `{ "spt": "..." }` / `{ "token": "..." }`. Testing also requires a Stripe-capable MPP service plus saved defaults for the token endpoint and payment method.
 
 ### x402 Payment Plugin
 

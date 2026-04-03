@@ -98,6 +98,16 @@ export class PluginManager {
     // Load x402 payment plugin (XGate discovery + x402 payment signing)
     if (opts.authSdk) {
       try {
+        const { createMppPlugin } = await import('./mpp.js');
+        const mppPlugin = createMppPlugin({
+          authSdk: opts.authSdk,
+        });
+        await this.register(mppPlugin);
+      } catch (err) {
+        console.warn(chalk.dim(`  [mpp] Skipped: ${err.message}`));
+      }
+
+      try {
         const { createX402Plugin } = await import('./x402.js');
         const x402Plugin = createX402Plugin({
           authSdk: opts.authSdk,
@@ -303,7 +313,8 @@ export class PluginManager {
     if (enabled) {
       try {
         await this.client.use(plugin);
-      } catch {
+      } catch (err) {
+        console.warn(chalk.dim(`  [plugin] Disabled ${plugin.name}: ${err.message}`));
         // Client rejected — still track it as disabled
         enabled = false;
       }

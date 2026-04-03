@@ -57,7 +57,11 @@ export const COMMANDS = [
   { cmd: '/payment enable|disable', desc: 'Turn PAYG charging on or off' },
   { cmd: '/payment token <T>', desc: 'Choose the token used to settle PAYG charges' },
   { cmd: '/payment mode <M>', desc: 'Set mode: pay_per_request or debt_accumulation' },
-{ cmd: '/x402', desc: 'x402 payment plugin — search, call, stats, favorites' },
+  { cmd: '/mpp', desc: 'MPP client plugin — status and paid endpoint calls' },
+  { cmd: '/mpp services [query]', desc: 'Browse public MPP services from the official directory' },
+  { cmd: '/mpp service <id|query>', desc: 'Inspect one MPP service and its paid endpoints' },
+  { cmd: '/mpp state', desc: 'Show persisted Tempo resume state' },
+  { cmd: '/x402', desc: 'x402 payment plugin — search, call, stats, favorites' },
   { cmd: '/secrets', desc: 'Manage encrypted plugin secrets' },
   { cmd: '/glow on|off', desc: 'Toggle markdown rendering' },
   { cmd: '/log on|off', desc: 'Toggle stream logging to file' },
@@ -121,6 +125,7 @@ function formatProfileDetails(info, ctx, runtimeVaultInfo = null) {
     `  ${chalk.dim('Credentials:')}   ${info.files.env ? chalk.green('present') : chalk.dim('missing')}`,
     `  ${chalk.dim('Secrets:')}       ${info.files.secrets ? chalk.green('present') : chalk.dim('missing')}`,
     `  ${chalk.dim('Plugins:')}       ${info.files.plugins ? chalk.green('present') : chalk.dim('missing')}`,
+    `  ${chalk.dim('MPP State:')}     ${info.files.mppState ? chalk.green('present') : chalk.dim('missing')}`,
     `  ${chalk.dim('x402 Favs:')}     ${info.files.x402Favorites ? chalk.green('present') : chalk.dim('missing')}`,
     `  ${chalk.dim('History Files:')} ${info.historyCount}`,
   ];
@@ -1187,6 +1192,203 @@ function cmdExit(ctx) {
 }
 
 // ============================================================================
+// MPP Command
+// ============================================================================
+
+function formatJsonBlock(value) {
+  return '```json\n' + JSON.stringify(value, null, 2) + '\n```';
+}
+
+function formatMppServices(result) {
+  const services = Array.isArray(result?.services) ? result.services : [];
+  if (services.length === 0) {
+    return '\n' + chalk.dim('No public MPP services matched the current query.') + '\n';
+  }
+
+  const lines = [
+    '',
+    chalk.bold.white('MPP Services'),
+    chalk.dim('─'.repeat(40)),
+    ...services.flatMap((service) => {
+      const categories = Array.isArray(service.categories) && service.categories.length > 0
+        ? service.categories.join(', ')
+        : 'uncategorized';
+      const paidCount = typeof service.paidEndpointCount === 'number'
+        ? `${service.paidEndpointCount} paid endpoint${service.paidEndpointCount === 1 ? '' : 's'}`
+        : 'payment metadata unavailable';
+      return [
+        `  ${chalk.white(service.id || service.name || 'unknown')} ${chalk.dim(`(${service.name || 'Unnamed service'})`)}`,
+        `    ${chalk.dim(service.serviceUrl || 'No service URL')} ${chalk.dim('·')} ${chalk.dim(categories)} ${chalk.dim('·')} ${chalk.dim(paidCount)}`,
+      ];
+    }),
+    '',
+    chalk.dim(`Source: ${result.directoryUrl || 'https://mpp.dev/api/services'}`),
+    '',
+  ];
+
+  return lines.join('\n');
+}
+
+function formatMppState(result) {
+  const channels = Array.isArray(result?.tempo?.channels) ? result.tempo.channels : [];
+  const lines = [
+    '',
+    chalk.bold.white('MPP Profile State'),
+    chalk.dim('─'.repeat(40)),
+    `  ${chalk.cyan('Tempo Channels:')} ${channels.length > 0 ? chalk.green(String(channels.length)) : chalk.dim('none')}`,
+  ];
+
+  if (channels.length > 0) {
+    for (const channel of channels) {
+      lines.push(
+        `  ${chalk.white(channel.channelId || 'unknown')} ${chalk.dim('·')} ${chalk.dim(channel.currency || 'unknown currency')}`,
+        `    ${chalk.dim(channel.recipient || 'unknown recipient')} ${chalk.dim('· cumulativeRaw')} ${chalk.white(String(channel.cumulativeAmountRaw || '0'))}`
+      );
+    }
+  }
+
+  lines.push('');
+
+  return lines.join('\n');
+}
+
+async function runMppExecutor(executors, name, args = {}) {
+  const executor = executors[name];
+  if (typeof executor !== 'function') {
+    throw new Error(`MPP executor "${name}" is not available.`);
+  }
+  return executor(args);
+}
+
+async function cmdMpp(args, ctx) {
+  const parts = args.trim().split(/\s+/).filter(Boolean);
+  const sub = parts[0] || '';
+
+  const entry = ctx.pluginManager?.plugins?.get('hustle-mpp');
+  if (!entry || !entry.enabled) {
+    ctx.appendMessage('system', chalk.red('MPP plugin not loaded. Check that mppx and viem are installed.'));
+    return { handled: true };
+  }
+
+  const executors = entry.plugin.executors || {};
+
+  if (!sub) {
+    const lines = [
+      chalk.bold.white('MPP Client Plugin'),
+      chalk.dim('─'.repeat(40)),
+      `  ${chalk.cyan('Status:')} ${chalk.green('Active')}`,
+      `  ${chalk.cyan('Tools:')} mpp_call, mpp_services, mpp_service_info, mpp_state, mpp_tempo_clear`,
+      `  ${chalk.cyan('Flow:')} 402 challenge → Authorization: Payment → Payment-Receipt`,
+      `  ${chalk.cyan('Scope:')} Tempo crypto via ${chalk.white('mppx/client')}`,
+      `  ${chalk.cyan('Discovery:')} Official directory at ${chalk.white('https://mpp.dev/api/services')}`,
+      `  ${chalk.cyan('Persistence:')} Profile-scoped Tempo resume hints in ${chalk.white('mpp-state.json')}`,
+      '',
+      chalk.dim('  /mpp call <url> [json-body]  Call an MPP endpoint with automatic payment'),
+      chalk.dim('  /mpp services [query]        Browse public MPP services'),
+      chalk.dim('  /mpp service <id|query>      Inspect one service and its paid endpoints'),
+      chalk.dim('  /mpp state                   Show persisted Tempo channels'),
+      chalk.dim('  /mpp state clear             Clear persisted Tempo channel hints'),
+      '',
+      chalk.dim('  Advanced tool fields for AI/tool use: method, headers, paymentMethod, deposit, maxDeposit, paymentMode, action, channelId, cumulativeAmountRaw, additionalDepositRaw.'),
+      chalk.dim('  Only Tempo is enabled in this branch; Stripe support is documented as deferred.'),
+      chalk.dim('  Official docs: https://docs.stripe.com/payments/machine/mpp'),
+    ];
+    ctx.appendMessage('system', '\n' + lines.join('\n') + '\n');
+    return { handled: true };
+  }
+
+  if (sub === 'services') {
+    const query = parts.slice(1).join(' ');
+    ctx.appendMessage('system', chalk.dim(`[mpp] Loading public MPP services${query ? ` for "${query}"` : ''}...`));
+    try {
+      const result = await runMppExecutor(executors, 'mpp_services', {
+        ...(query ? { query } : {}),
+        limit: 10,
+      });
+      if (result?.error) {
+        ctx.appendMessage('system', chalk.red(`Error: ${result.error}`));
+      } else {
+        ctx.appendMessage('system', formatMppServices(result));
+      }
+    } catch (err) {
+      ctx.appendMessage('system', chalk.red(`Error: ${err.message}`));
+    }
+    return { handled: true };
+  }
+
+  if (sub === 'service') {
+    const identifier = parts.slice(1).join(' ');
+    if (!identifier) {
+      ctx.appendMessage('system', chalk.yellow('Usage: /mpp service <id|query>'));
+      return { handled: true };
+    }
+
+    ctx.appendMessage('system', chalk.dim(`[mpp] Inspecting service "${identifier}"...`));
+    try {
+      const result = await runMppExecutor(executors, 'mpp_service_info', { id: identifier, query: identifier });
+      if (result?.error) {
+        ctx.appendMessage('system', chalk.red(`Error: ${result.error}`));
+      } else {
+        ctx.appendMessage('system', formatJsonBlock(result));
+      }
+    } catch (err) {
+      ctx.appendMessage('system', chalk.red(`Error: ${err.message}`));
+    }
+    return { handled: true };
+  }
+
+  if (sub === 'state') {
+    const nested = (parts[1] || '').toLowerCase();
+    try {
+      if (nested === 'clear') {
+        await runMppExecutor(executors, 'mpp_tempo_clear', {});
+        ctx.appendMessage('system', chalk.green('Cleared persisted Tempo channel hints for the active profile.'));
+      }
+
+      const result = await runMppExecutor(executors, 'mpp_state', {});
+      if (result?.error) {
+        ctx.appendMessage('system', chalk.red(`Error: ${result.error}`));
+      } else {
+        ctx.appendMessage('system', formatMppState(result));
+      }
+    } catch (err) {
+      ctx.appendMessage('system', chalk.red(`Error: ${err.message}`));
+    }
+    return { handled: true };
+  }
+
+  if (sub === 'stripe') {
+    ctx.appendMessage('system', chalk.yellow('Stripe MPP support is currently removed in this branch. See the MPP docs note for deferred Stripe setup/testing details.'));
+    return { handled: true };
+  }
+
+  if (sub === 'call') {
+    const url = parts[1];
+    if (!url) {
+      ctx.appendMessage('system', chalk.yellow('Usage: /mpp call <url> [json-body]'));
+      return { handled: true };
+    }
+
+    const bodyStr = parts.slice(2).join(' ') || undefined;
+    ctx.appendMessage('system', chalk.dim(`[mpp] Calling ${url}...`));
+    try {
+      const result = await runMppExecutor(executors, 'mpp_call', { url, ...(bodyStr ? { body: bodyStr } : {}) });
+      if (result?.error) {
+        ctx.appendMessage('system', chalk.red(`Error: ${result.error}`));
+      } else {
+        ctx.appendMessage('system', formatJsonBlock(result));
+      }
+    } catch (err) {
+      ctx.appendMessage('system', chalk.red(`Error: ${err.message}`));
+    }
+    return { handled: true };
+  }
+
+  ctx.appendMessage('system', chalk.yellow('Usage: /mpp [services [query]|service <id|query>|state [clear]|call <url> [json-body]]'));
+  return { handled: true };
+}
+
+// ============================================================================
 // x402 Command
 // ============================================================================
 
@@ -1443,6 +1645,9 @@ export async function processCommand(input, ctx) {
 
     case '/payment':
       return cmdPayment(args, ctx);
+
+    case '/mpp':
+      return cmdMpp(args, ctx);
 
     case '/x402':
       return cmdX402(args, ctx);
