@@ -179,6 +179,7 @@ export function profilePath(profileName = _currentProfile, ...segments) {
  *   envKeys: string,
  *   secrets: string,
  *   plugins: string,
+ *   mppState: string,
  *   x402Favorites: string,
  *   historyDir: string,
  * }}
@@ -196,6 +197,7 @@ export function getProfilePaths(profileName = _currentProfile) {
     envKeys: path.join(profile, '.env.keys'),
     secrets: path.join(profile, 'secrets.json'),
     plugins: path.join(profile, 'plugins.json'),
+    mppState: path.join(profile, 'mpp-state.json'),
     x402Favorites: path.join(profile, 'x402-favorites.json'),
     historyDir: path.join(profile, 'history'),
   };
@@ -448,6 +450,7 @@ export function inspectProfile(profileName) {
       secrets: fs.existsSync(paths.secrets),
       session: fs.existsSync(paths.session),
       plugins: fs.existsSync(paths.plugins),
+      mppState: fs.existsSync(paths.mppState),
       x402Favorites: fs.existsSync(paths.x402Favorites),
       history: fs.existsSync(paths.historyDir),
     },

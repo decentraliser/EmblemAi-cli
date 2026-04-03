@@ -279,6 +279,7 @@ function formatProfileInspection(info) {
     `  ${chalk.dim('Credentials:')}   ${info.files.env ? chalk.green('present') : chalk.dim('missing')}`,
     `  ${chalk.dim('Secrets:')}       ${info.files.secrets ? chalk.green('present') : chalk.dim('missing')}`,
     `  ${chalk.dim('Plugins:')}       ${info.files.plugins ? chalk.green('present') : chalk.dim('missing')}`,
+    `  ${chalk.dim('MPP State:')}     ${info.files.mppState ? chalk.green('present') : chalk.dim('missing')}`,
     `  ${chalk.dim('x402 Favs:')}     ${info.files.x402Favorites ? chalk.green('present') : chalk.dim('missing')}`,
     `  ${chalk.dim('History Files:')} ${info.historyCount}`,
   ];
@@ -814,7 +815,7 @@ async function main() {
       completer: (line) => {
         const cmds = ['/help', '/profile', '/plugins', '/tools', '/auth', '/wallet',
           '/portfolio', '/model', '/models', '/stream', '/debug', '/history', '/payment',
-          '/secrets', '/glow', '/log', '/reset', '/exit', '/settings'];
+          '/mpp', '/x402', '/secrets', '/glow', '/log', '/reset', '/exit', '/settings'];
         const hits = cmds.filter(c => c.startsWith(line));
         return [hits.length ? hits : cmds, line];
       },

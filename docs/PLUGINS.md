@@ -6,6 +6,94 @@ EmblemAI uses a plugin system to extend AI capabilities with client-side tools. 
 
 ## Active Plugins
 
+### MPP -- Machine Payments Protocol
+
+**Status**: Loaded by default
+**Description**: Calls MPP payment-gated HTTP endpoints using the official `402` challenge → `Authorization: Payment` → `Payment-Receipt` flow. This implementation uses the `mppx/client` SDK plus Emblem's EVM signer from `@emblemvault/auth-sdk`.
+
+This section is grounded in the official Stripe MPP docs:
+
+- https://docs.stripe.com/payments/machine/mpp
+- https://mpp.dev/quickstart/client
+
+#### Current Scope
+
+- Tempo-backed crypto MPP requests
+- Automatic credential creation with the Emblem EVM signer
+- Public service discovery through `https://mpp.dev/api/services`
+- Profile-scoped Tempo session resume hints stored in `~/.emblemai/profiles/<profile>/mpp-state.json`
+- Support for both Tempo `charge` and `session` intents through `mppx`
+- Receipt extraction from the `Payment-Receipt` header
+
+#### Current Limitations
+
+- Stripe-backed MPP flows are intentionally removed in this branch
+- Streaming/SSE-specific helpers are not included in this first slice
+
+#### Tools
+
+##### mpp_call
+
+Call an MPP endpoint with automatic payment handling.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `url` | string | Yes | Full MPP endpoint URL |
+| `method` | string | No | HTTP method. Defaults to `GET` when no body is supplied, otherwise `POST` |
+| `body` | string | No | Optional raw string or JSON string request body |
+| `headers` | string | No | Optional JSON string of extra request headers |
+| `paymentMethod` | string | No | Preferred MPP method. Only `tempo` is currently supported |
+| `deposit` | string | No | Optional Tempo session deposit amount in human-readable units |
+| `maxDeposit` | string | No | Optional cap for auto-managed Tempo session deposits |
+| `paymentMode` | string | No | Tempo credential transport mode: `push` or `pull` |
+| `action` | string | No | Manual Tempo session action: `open`, `topUp`, `voucher`, `close` |
+| `channelId` | string | No | Session channel ID for manual session flows |
+| `cumulativeAmountRaw` | string | No | Raw cumulative amount for manual voucher/close flows. Prefer when reusing values from receipts or persisted state |
+| `cumulativeAmount` | string | No | Human-unit cumulative amount for manual voucher/close flows |
+| `transaction` | string | No | Serialized transaction for manual open/topUp flows |
+| `authorizedSigner` | string | No | Authorized signer address for session vouchers |
+| `additionalDepositRaw` | string | No | Raw additional deposit amount for manual top-up flows |
+| `additionalDeposit` | string | No | Additional deposit amount for manual top-up flows |
+##### mpp_services
+
+List public MPP services from the official service directory.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `query` | string | Free-text search across service id, name, description, categories, and tags |
+| `category` | string | Category filter such as `ai` or `blockchain` |
+| `tag` | string | Tag filter such as `email` or `prices` |
+| `method` | string | Payment method filter such as `tempo` |
+| `status` | string | Status filter such as `active` |
+| `limit` | number | Maximum results (default 10, max 50) |
+
+##### mpp_service_info
+
+Inspect one public MPP service and its endpoint/payment metadata.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | string | Exact service id when known |
+| `query` | string | Fallback query when the id is not known |
+
+##### mpp_state
+
+Show persisted per-profile MPP state.
+
+Returns:
+
+- resumable Tempo channel hints
+
+#### Notes
+
+- The plugin returns parsed response data plus any available `Payment-Receipt`.
+- The plugin currently assumes an authenticated Emblem session and reuses the auth-sdk EVM account for MPP credential signing.
+- Tempo persistence stores only the minimum safe resume tuple (`channelId`, recipient, currency, chain metadata, cumulative amount).
+- Persisted/state cumulative values are raw on-chain units and are surfaced as `cumulativeAmountRaw` to avoid unit confusion.
+- Deferred Stripe note: the removed Stripe path used a callback endpoint rather than local Stripe secret-key logic inside the CLI. Re-enabling it would require a token-mint endpoint that accepts `amount`, `challenge`, `currency`, `expiresAt`, `metadata`, `networkId`, and `paymentMethod`, then returns an SPT via a raw string response or JSON with `spt` / `token`.
+
+---
+
 ### x402 -- Pay-Per-Call API Access
 
 **Status**: Loaded by default
