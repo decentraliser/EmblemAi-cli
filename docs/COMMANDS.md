@@ -152,6 +152,43 @@ Deferred Stripe implementation note:
 - The endpoint response could be a raw token string or JSON with `spt` / `token`
 - Testing required saved endpoint/payment-method defaults plus a Stripe-capable MPP service
 
+### Encrypted Safe
+
+Store private keys, passwords, card numbers, API keys, and any secrets. Each entry is individually encrypted with AES-256-GCM. The server never sees plaintext.
+
+| Command | Description |
+|---------|-------------|
+| `/safe` | Interactive safe menu |
+| `/safe set <name> [value]` | Store a secret (prompts for value if omitted) |
+| `/safe get <name>` | Retrieve a secret |
+| `/safe list` | List stored secret names |
+| `/safe delete <name>` | Delete a secret |
+| `/safe push` | Encrypt and push entire safe to cloud |
+| `/safe pull` | Pull safe from cloud and decrypt |
+| `/safe export [path]` | Export encrypted safe file (default: `~/emblemai-safe.enc`) |
+| `/safe import <path>` | Import a safe file into the current profile |
+
+**CLI subcommands** (no interactive session required):
+
+```bash
+# Secret management
+emblemai safe set "eth-key" "0x4c08..."   # Store a secret
+emblemai safe set "bank-card"             # Prompts for value
+emblemai safe get "eth-key"               # Retrieve (raw output, pipeable)
+emblemai safe list                        # List names
+emblemai safe delete "eth-key"            # Remove
+
+# Cloud sync
+emblemai safe push                        # Push safe to cloud
+emblemai safe pull -p "password"          # Pull safe from cloud
+
+# File backup
+emblemai safe export ~/backup.enc         # Export encrypted file
+emblemai safe import ~/backup.enc         # Import from file
+```
+
+Add `--profile <name>` to target a specific profile, and `-p "password"` to provide the password non-interactively.
+
 ### Secrets
 
 | Command | Description |

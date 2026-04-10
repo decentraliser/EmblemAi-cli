@@ -5,6 +5,8 @@
  * Each command receives a context object with the full runtime state.
  */
 
+import os from 'os';
+import path from 'path';
 import chalk from 'chalk';
 import {
   createProfile,
@@ -63,6 +65,9 @@ export const COMMANDS = [
   { cmd: '/mpp state', desc: 'Show persisted Tempo resume state' },
   { cmd: '/x402', desc: 'x402 payment plugin — search, call, stats, favorites' },
   { cmd: '/secrets', desc: 'Manage encrypted plugin secrets' },
+  { cmd: '/safe', desc: 'Encrypted safe — store secrets, keys, passwords' },
+  { cmd: '/safe set|get|list|delete', desc: 'Manage secrets' },
+  { cmd: '/safe push|pull', desc: 'Sync safe to/from cloud' },
   { cmd: '/glow on|off', desc: 'Toggle markdown rendering' },
   { cmd: '/log on|off', desc: 'Toggle stream logging to file' },
   { cmd: '/reset', desc: 'Clear conversation' },
@@ -1118,6 +1123,193 @@ async function cmdSecrets(args, ctx) {
   return { handled: true };
 }
 
+async function cmdSafe(args, ctx) {
+  const safe = await import('./safe-store.js');
+  const [action, ...rest] = args.trim().split(/\s+/);
+  const subArg = rest.join(' ');
+
+  // Direct subcommands
+  const SYNC_ACTIONS = ['push', 'pull', 'export', 'import'];
+  if (SYNC_ACTIONS.includes(action?.toLowerCase())) {
+    return _runSafeAction(action.toLowerCase(), subArg, ctx, safe);
+  }
+
+  // KV subcommands: /safe set <name> [value], /safe get <name>, /safe list, /safe delete <name>
+  const lowerAction = action?.toLowerCase();
+  if (lowerAction === 'set') return _safeCmdSet(rest, ctx, safe);
+  if (lowerAction === 'get') return _safeCmdGet(rest, ctx, safe);
+  if (lowerAction === 'list' || lowerAction === 'ls') return _safeCmdList(ctx, safe);
+  if (lowerAction === 'delete' || lowerAction === 'rm') return _safeCmdDelete(rest, ctx, safe);
+
+  // Interactive menu
+  if (!ctx.promptText) {
+    ctx.appendMessage('system', chalk.red('Interactive prompts not available. Use /safe set|get|list|delete|push|pull.'));
+    return { handled: true };
+  }
+
+  const names = safe.safeList({ profileName: ctx.profileName });
+  const countLine = names.length > 0
+    ? `  ${chalk.white(names.length)} secret${names.length === 1 ? '' : 's'} stored`
+    : chalk.dim('  Safe is empty');
+
+  ctx.appendMessage('system', [
+    '', chalk.bold.white('  Encrypted Safe'),
+    chalk.dim('  ' + '\u2500'.repeat(30)), '',
+    countLine, '',
+    `  ${chalk.cyan('1.')} Store a secret`,
+    `  ${chalk.cyan('2.')} Retrieve a secret`,
+    `  ${chalk.cyan('3.')} List secrets`,
+    `  ${chalk.cyan('4.')} Delete a secret`,
+    chalk.dim('  \u2500\u2500\u2500'),
+    `  ${chalk.cyan('5.')} Sync to cloud`,
+    `  ${chalk.cyan('6.')} Pull from cloud`,
+    `  ${chalk.cyan('7.')} Back`, '',
+  ].join('\n'));
+
+  const choice = (await ctx.promptText(chalk.cyan('  Select (1-7): '))).trim();
+
+  if (choice === '1') {
+    const name = (await ctx.promptText(chalk.cyan('  Secret name: '))).trim();
+    if (!name) return { handled: true };
+    const value = await ctx.promptPassword(`  Value for "${name}": `);
+    return _safeCmdSet([name, value], ctx, safe);
+  }
+  if (choice === '2') {
+    const name = (await ctx.promptText(chalk.cyan('  Secret name: '))).trim();
+    return _safeCmdGet([name], ctx, safe);
+  }
+  if (choice === '3') return _safeCmdList(ctx, safe);
+  if (choice === '4') {
+    const name = (await ctx.promptText(chalk.cyan('  Secret name to delete: '))).trim();
+    return _safeCmdDelete([name], ctx, safe);
+  }
+  if (choice === '5') return _runSafeAction('push', '', ctx, safe);
+  if (choice === '6') return _runSafeAction('pull', '', ctx, safe);
+  return { handled: true };
+}
+
+// ── Safe KV interactive handlers ────────────────────────────────────────────
+
+async function _safeCmdSet(parts, ctx, safe) {
+  if (!_requireAuth(ctx)) return { handled: true };
+  const name = parts[0]?.trim();
+  if (!name) {
+    ctx.appendMessage('system', chalk.yellow('  Usage: /safe set <name> [value]'));
+    return { handled: true };
+  }
+  let value = parts.slice(1).join(' ');
+  if (!value && ctx.promptPassword) {
+    value = await ctx.promptPassword(`  Value for "${name}": `);
+  }
+  if (!value && value !== '') {
+    ctx.appendMessage('system', chalk.yellow('  No value provided.'));
+    return { handled: true };
+  }
+  try {
+    await safe.safeSet(name, value, ctx.authSdk, { profileName: ctx.profileName });
+    ctx.appendMessage('system', chalk.green(`  Stored "${name}" in safe.`));
+    ctx.addLog('safe', `Set "${name}"`);
+  } catch (err) {
+    ctx.appendMessage('system', chalk.red(`  Failed: ${err.message}`));
+  }
+  return { handled: true };
+}
+
+async function _safeCmdGet(parts, ctx, safe) {
+  if (!_requireAuth(ctx)) return { handled: true };
+  const name = parts[0]?.trim();
+  if (!name) {
+    ctx.appendMessage('system', chalk.yellow('  Usage: /safe get <name>'));
+    return { handled: true };
+  }
+  try {
+    const value = await safe.safeGet(name, ctx.authSdk, { profileName: ctx.profileName });
+    if (value === null) {
+      ctx.appendMessage('system', chalk.yellow(`  Secret "${name}" not found.`));
+    } else {
+      ctx.appendMessage('system', `  ${chalk.dim(name + ':')} ${chalk.white(value)}`);
+    }
+  } catch (err) {
+    ctx.appendMessage('system', chalk.red(`  Failed: ${err.message}`));
+  }
+  return { handled: true };
+}
+
+function _safeCmdList(ctx, safe) {
+  const names = safe.safeList({ profileName: ctx.profileName });
+  if (names.length === 0) {
+    ctx.appendMessage('system', chalk.dim('  Safe is empty.'));
+    return { handled: true };
+  }
+  ctx.appendMessage('system', [
+    '', chalk.bold.white('  Safe'),
+    chalk.dim('  ' + '\u2500'.repeat(30)), '',
+    ...names.map(n => `  ${chalk.white(n)}`),
+    '', chalk.dim(`  ${names.length} secret${names.length === 1 ? '' : 's'}`), '',
+  ].join('\n'));
+  return { handled: true };
+}
+
+function _safeCmdDelete(parts, ctx, safe) {
+  const name = parts[0]?.trim();
+  if (!name) {
+    ctx.appendMessage('system', chalk.yellow('  Usage: /safe delete <name>'));
+    return { handled: true };
+  }
+  const deleted = safe.safeDelete(name, { profileName: ctx.profileName });
+  if (deleted) {
+    ctx.appendMessage('system', chalk.green(`  Deleted "${name}" from safe.`));
+    ctx.addLog('safe', `Deleted "${name}"`);
+  } else {
+    ctx.appendMessage('system', chalk.yellow(`  Secret "${name}" not found.`));
+  }
+  return { handled: true };
+}
+
+function _requireAuth(ctx) {
+  if (!ctx.authSdk) {
+    ctx.appendMessage('system', chalk.red('  Not authenticated — safe operations require authentication.'));
+    return false;
+  }
+  return true;
+}
+
+async function _runSafeAction(action, arg, ctx, safe) {
+  if (!_requireAuth(ctx)) return { handled: true };
+  const opts = { profileName: ctx.profileName, apiUrl: ctx.apiUrl };
+
+  if (action === 'push') {
+    try {
+      ctx.appendMessage('system', chalk.dim('  Syncing safe to cloud...'));
+      const result = await safe.pushToCloud(ctx.authSdk, opts);
+      ctx.appendMessage('system', chalk.green(`  Safe pushed (${result.count} secret${result.count === 1 ? '' : 's'}).`));
+      ctx.addLog('safe', `Pushed ${result.count} secrets to cloud`);
+    } catch (err) {
+      ctx.appendMessage('system', chalk.red(`  Push failed: ${err.message}`));
+    }
+    return { handled: true };
+  }
+
+  if (action === 'pull') {
+    try {
+      ctx.appendMessage('system', chalk.dim('  Pulling safe from cloud...'));
+      const result = await safe.pullFromCloud(ctx.authSdk, opts);
+      if (!result) {
+        ctx.appendMessage('system', chalk.yellow('  No safe found in cloud for this account.'));
+      } else {
+        ctx.appendMessage('system', chalk.green(`  Safe pulled (${result.count} secret${result.count === 1 ? '' : 's'}).`));
+      }
+      ctx.addLog('safe', `Pulled from cloud`);
+    } catch (err) {
+      ctx.appendMessage('system', chalk.red(`  Pull failed: ${err.message}`));
+    }
+    return { handled: true };
+  }
+
+  ctx.appendMessage('system', chalk.yellow('  Usage: /safe [set|get|list|delete|push|pull]'));
+  return { handled: true };
+}
+
 function cmdGlow(args, ctx) {
   const val = args.trim().toLowerCase();
   if (val === 'on') {
@@ -1654,6 +1846,9 @@ export async function processCommand(input, ctx) {
 
     case '/secrets':
       return cmdSecrets(args, ctx);
+
+    case '/safe':
+      return cmdSafe(args, ctx);
 
     case '/glow':
       return cmdGlow(args, ctx);
