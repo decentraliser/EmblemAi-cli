@@ -181,6 +181,7 @@ export function profilePath(profileName = _currentProfile, ...segments) {
  *   plugins: string,
  *   mppState: string,
  *   x402Favorites: string,
+ *   safe: string,
  *   historyDir: string,
  * }}
  */
@@ -199,6 +200,7 @@ export function getProfilePaths(profileName = _currentProfile) {
     plugins: path.join(profile, 'plugins.json'),
     mppState: path.join(profile, 'mpp-state.json'),
     x402Favorites: path.join(profile, 'x402-favorites.json'),
+    safe: path.join(profile, 'safe.json'),
     historyDir: path.join(profile, 'history'),
   };
 }

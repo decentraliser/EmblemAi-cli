@@ -268,6 +268,8 @@ emblemai --reset
 | `/payment token <T>` | Set the token used to settle PAYG charges |
 | `/payment mode <M>` | Set mode: `pay_per_request` or `debt_accumulation` |
 | `/secrets` | Manage encrypted plugin secrets |
+| `/safe` | Encrypted safe — store secrets, keys, passwords |
+| `/safe set\|get\|list\|delete` | Manage individual secrets |
 | `/x402` | x402 plugin status and quick actions |
 | `/glow on\|off` | Toggle glow markdown rendering |
 | `/log on\|off` | Toggle stream logging |
@@ -283,6 +285,64 @@ emblemai --restore-auth ~/emblemai-auth-backup.json
 ```
 
 This restores the credential files into the resolved active profile. If you pass `--profile <name>`, restore writes into that profile and creates it first when needed.
+
+## Encrypted Safe
+
+Store private keys, passwords, card numbers, API keys, and any secrets. Each entry is individually encrypted with AES-256-GCM using a key derived from your wallet password (scrypt). The server never sees plaintext.
+
+### Store and Retrieve Secrets
+
+```bash
+# Store a secret (value inline or prompted)
+emblemai safe set "eth-private-key" "0x4c0883a..."
+emblemai safe set "bank-card"                      # prompts for value
+
+# Retrieve a secret (raw output, pipeable)
+emblemai safe get "eth-private-key"
+
+# List stored secret names
+emblemai safe list
+
+# Delete a secret
+emblemai safe delete "eth-private-key"
+```
+
+### Cloud Sync
+
+Push your entire safe (credentials + secrets) to the cloud for cross-machine access:
+
+```bash
+emblemai safe push                              # encrypt + upload
+emblemai safe pull -p "your-password"           # download + decrypt on new machine
+emblemai safe push --profile treasury           # specific profile
+```
+
+### File Export / Import
+
+For offline backup or transferring without the cloud:
+
+```bash
+emblemai safe export ~/emblemai-safe.enc
+emblemai safe import ~/emblemai-safe.enc -p "your-password"
+```
+
+### Interactive Mode
+
+In the interactive CLI, use `/safe` for a guided menu, or `/safe set`, `/safe get`, `/safe list`, `/safe delete` directly.
+
+### Agent Integration
+
+```bash
+# New machine setup: pull safe, then use secrets
+emblemai safe pull -p "$AGENT_PASSWORD"
+ETH_KEY=$(emblemai safe get "eth-private-key")
+
+# Store a secret from an agent
+emblemai safe set "api-token" "$TOKEN"
+
+# Backup after changes
+emblemai safe push
+```
 
 ## Local Development
 
