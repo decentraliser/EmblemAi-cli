@@ -574,3 +574,21 @@ test('deleteProfile can remove a noncurrent profile when active-profile is missi
   assert.equal(profile.profileExists('default'), true);
   assert.equal(profile.profileExists('ops'), true);
 });
+
+test('needsRefresh returns true when session is within the refresh buffer', () => {
+  const fresh = { expiresAt: Date.now() + 10 * 60 * 1000 }; // 10 min out
+  const expiring = { expiresAt: Date.now() + 2 * 60 * 1000 }; // 2 min out
+  const expired = { expiresAt: Date.now() - 1000 };
+
+  assert.equal(sessionStore.needsRefresh(fresh), false);
+  assert.equal(sessionStore.needsRefresh(expiring), true);
+  assert.equal(sessionStore.needsRefresh(expired), true);
+});
+
+test('isSessionExpired returns true only when past expiresAt', () => {
+  const valid = { expiresAt: Date.now() + 60_000 };
+  const expired = { expiresAt: Date.now() - 1000 };
+
+  assert.equal(sessionStore.isSessionExpired(valid), false);
+  assert.equal(sessionStore.isSessionExpired(expired), true);
+});

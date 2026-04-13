@@ -12,7 +12,7 @@ import os from 'os';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import dotenvx from '@dotenvx/dotenvx';
-import { saveSession, loadSession, clearSession, isSessionExpired } from './session-store.js';
+import { saveSession, loadSession, clearSession, isSessionExpired, needsRefresh } from './session-store.js';
 import { startAuthServer } from './auth-server.js';
 import { ensureProfileDir, getLegacyFlatPaths, getProfilePaths } from './profile.js';
 
@@ -443,6 +443,56 @@ export async function authenticateWithSession(session, config = {}) {
   authSdk.hydrateSession(session);
 
   return { authSdk, session };
+}
+
+// ── Autonomous Token Refresh ────────────────────────────────────────────────
+
+/**
+ * Proactively refresh the auth session when it is close to expiry.
+ *
+ * 1. Check needsRefresh() on the current SDK session
+ * 2. If refresh is needed, attempt authSdk.refreshSession()
+ * 3. If SDK refresh fails, fall back to re-authenticating with stored password
+ * 4. Persist the new session to disk on success
+ *
+ * Returns true if a refresh occurred, false otherwise.
+ *
+ * @param {object} authSdk - Authenticated EmblemAuthSDK instance
+ * @param {{ authUrl?: string, apiUrl?: string }} [config]
+ * @returns {Promise<boolean>}
+ */
+export async function tryAutoRefresh(authSdk, config = {}) {
+  const session = authSdk.getSession();
+  if (!session || !needsRefresh(session)) return false;
+
+  // 1. Try SDK-level refresh
+  try {
+    const refreshed = await authSdk.refreshSession();
+    if (refreshed?.authToken) {
+      saveSession(refreshed);
+      return true;
+    }
+  } catch {
+    // SDK refresh failed — fall through to password re-auth
+  }
+
+  // 2. Fall back to re-authenticating with stored password
+  const storedPassword = getCredential('EMBLEM_PASSWORD');
+  if (storedPassword) {
+    try {
+      const result = await authenticate(storedPassword, config);
+      const newSession = result.authSdk.getSession();
+      if (newSession) {
+        authSdk.hydrateSession(newSession);
+        saveSession(newSession);
+        return true;
+      }
+    } catch {
+      // Re-auth also failed — caller should handle expired session
+    }
+  }
+
+  return false;
 }
 
 // ── Web Login Flow ──────────────────────────────────────────────────────────
@@ -876,7 +926,7 @@ export { clearSession } from './session-store.js';
 
 export default {
   getPassword, authenticate, authenticateWithSession, promptPassword, authMenu,
-  webLogin, polyfillBrowserGlobals,
+  webLogin, polyfillBrowserGlobals, tryAutoRefresh,
   getCredential, setCredential, readPluginSecrets, writePluginSecrets,
   readCredentialFile, writeCredentialFile, migrateLegacyCredentials,
 };

@@ -24,7 +24,7 @@ import path from 'path';
 import os from 'os';
 import readline from 'readline';
 import chalk from 'chalk';
-import { getPassword, getCredential, authenticate, webLogin, promptPassword, authMenu, readPluginSecrets, migrateLegacyCredentials } from './src/auth.js';
+import { getPassword, getCredential, authenticate, webLogin, promptPassword, authMenu, readPluginSecrets, migrateLegacyCredentials, tryAutoRefresh } from './src/auth.js';
 import { loadSessionPreferences, saveSession, saveSessionPreferences } from './src/session-store.js';
 import { processCommand } from './src/commands.js';
 import { PluginManager } from './src/plugins/loader.js';
@@ -645,6 +645,9 @@ async function main() {
         }
       }
     }
+    // Proactively refresh if the session is close to expiry
+    await tryAutoRefresh(authSdk, { authUrl, apiUrl });
+
     const vaultId = authSdk.getSession()?.user?.vaultId;
 
     // Migrate legacy single-file history to per-vault
@@ -727,6 +730,9 @@ async function main() {
       }
 
       await pluginManager.loadAll(pluginConfig, { authSdk, credentials: { secrets: pluginSecrets } });
+
+      // Ensure token is fresh before the single agent request
+      await tryAutoRefresh(authSdk, { authUrl, apiUrl });
 
       process.stdout.write(chalk.dim('Thinking'));
       const progressInterval = setInterval(() => process.stdout.write(chalk.dim('.')), 2000);
@@ -966,6 +972,9 @@ async function main() {
         }
         if (result.handled) continue;
       }
+
+      // Refresh token if close to expiry before making an API call
+      await tryAutoRefresh(authSdk, { authUrl, apiUrl });
 
       // Build messages
       const msgs = settings.retainHistory ? [...history.messages] : [];
