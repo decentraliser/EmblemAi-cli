@@ -118,6 +118,77 @@ The x402 plugin provides AI tools (`x402_search`, `x402_agents`, `x402_call`, `x
 "Show x402 ecosystem stats"
 ```
 
+### MPP Payments
+
+| Command | Description |
+|---------|-------------|
+| `/mpp` | Show MPP plugin status, scope, and quick usage |
+| `/mpp call <url> [json-body]` | Call an MPP endpoint with automatic payment handling |
+| `/mpp services [query]` | Browse public MPP services from the official directory |
+| `/mpp service <id\|query>` | Inspect one MPP service and its paid endpoints |
+| `/mpp state` | Show persisted Tempo resume state |
+| `/mpp state clear` | Clear persisted Tempo channel hints for the active profile |
+
+The current MPP client flow follows Stripe's documented `402` challenge → `Authorization: Payment` → `Payment-Receipt` pattern and uses the official `mppx` SDK.
+
+Current scope in this branch:
+
+- Tempo-backed crypto MPP endpoints
+- Public service discovery through `https://mpp.dev/api/services`
+- Persisted Tempo session/channel resume hints per profile
+- Receipt extraction
+
+Current limitations:
+
+- Stripe-backed MPP flows are intentionally removed in this branch
+- No dedicated SSE/streaming helper yet
+
+When reusing Tempo values from `/mpp state` or receipts, prefer the raw-unit fields (`cumulativeAmountRaw`, `additionalDepositRaw`) over the human-unit fields.
+
+Deferred Stripe implementation note:
+
+- The removed Stripe path was callback-based and required a user-supplied SPT mint endpoint
+- The endpoint contract accepted `amount`, `challenge`, `currency`, `expiresAt`, `metadata`, `networkId`, and `paymentMethod`
+- The endpoint response could be a raw token string or JSON with `spt` / `token`
+- Testing required saved endpoint/payment-method defaults plus a Stripe-capable MPP service
+
+### Encrypted Safe
+
+Store private keys, passwords, card numbers, API keys, and any secrets. Each entry is individually encrypted with AES-256-GCM. The server never sees plaintext.
+
+| Command | Description |
+|---------|-------------|
+| `/safe` | Interactive safe menu |
+| `/safe set <name> [value]` | Store a secret (prompts for value if omitted) |
+| `/safe get <name>` | Retrieve a secret |
+| `/safe list` | List stored secret names |
+| `/safe delete <name>` | Delete a secret |
+| `/safe push` | Encrypt and push entire safe to cloud |
+| `/safe pull` | Pull safe from cloud and decrypt |
+| `/safe export [path]` | Export encrypted safe file (default: `~/emblemai-safe.enc`) |
+| `/safe import <path>` | Import a safe file into the current profile |
+
+**CLI subcommands** (no interactive session required):
+
+```bash
+# Secret management
+emblemai safe set "eth-key" "0x4c08..."   # Store a secret
+emblemai safe set "bank-card"             # Prompts for value
+emblemai safe get "eth-key"               # Retrieve (raw output, pipeable)
+emblemai safe list                        # List names
+emblemai safe delete "eth-key"            # Remove
+
+# Cloud sync
+emblemai safe push                        # Push safe to cloud
+emblemai safe pull -p "password"          # Pull safe from cloud
+
+# File backup
+emblemai safe export ~/backup.enc         # Export encrypted file
+emblemai safe import ~/backup.enc         # Import from file
+```
+
+Add `--profile <name>` to target a specific profile, and `-p "password"` to provide the password non-interactively.
+
 ### Secrets
 
 | Command | Description |

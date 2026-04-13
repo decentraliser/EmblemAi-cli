@@ -24,11 +24,21 @@ import path from 'path';
 import os from 'os';
 import readline from 'readline';
 import chalk from 'chalk';
-import { getPassword, getCredential, authenticate, webLogin, promptPassword, authMenu, readPluginSecrets, migrateLegacyCredentials } from './src/auth.js';
 import { loadSessionPreferences, saveSession, saveSessionPreferences } from './src/session-store.js';
 import { processCommand } from './src/commands.js';
 import { PluginManager } from './src/plugins/loader.js';
-import { createModelSelection, getDefaultModelChoice, getDefaultModelChoices, resolveModelId } from './src/models.js';
+import { createModelSelection, getDefaultModelChoice, getDefaultModelChoices } from './src/models.js';
+import {
+  getPassword,
+  getCredential,
+  authenticate,
+  webLogin,
+  promptPassword,
+  readPluginSecrets,
+  migrateLegacyCredentials,
+  polyfillBrowserGlobals,
+  tryAutoRefresh,
+} from './src/auth.js';
 import {
   DEFAULT_PROFILE,
   createProfile,
@@ -178,6 +188,7 @@ function getPositionals(argv) {
 
 const positionals = getPositionals(args);
 const isProfileCliCommand = positionals[0] === 'profile';
+const isSafeCliCommand = positionals[0] === 'safe';
 
 // Endpoint overrides
 const hustleApiUrl = hustleUrlArg || process.env.HUSTLE_API_URL || undefined;
@@ -279,6 +290,7 @@ function formatProfileInspection(info) {
     `  ${chalk.dim('Credentials:')}   ${info.files.env ? chalk.green('present') : chalk.dim('missing')}`,
     `  ${chalk.dim('Secrets:')}       ${info.files.secrets ? chalk.green('present') : chalk.dim('missing')}`,
     `  ${chalk.dim('Plugins:')}       ${info.files.plugins ? chalk.green('present') : chalk.dim('missing')}`,
+    `  ${chalk.dim('MPP State:')}     ${info.files.mppState ? chalk.green('present') : chalk.dim('missing')}`,
     `  ${chalk.dim('x402 Favs:')}     ${info.files.x402Favorites ? chalk.green('present') : chalk.dim('missing')}`,
     `  ${chalk.dim('History Files:')} ${info.historyCount}`,
   ];
@@ -396,6 +408,119 @@ async function handleProfileCliCommand(activeProfile) {
 
   console.error(fmt.error('Usage: emblemai profile [list|create <name>|use <name>|inspect [name]|delete <name>]'));
   return 1;
+}
+
+async function handleSafeCliCommand(activeProfile) {
+  const safe = await import('./src/safe-store.js');
+
+  polyfillBrowserGlobals();
+
+  const sub = (positionals[1] || '').toLowerCase();
+  const opts = { profileName: activeProfile };
+
+  // No-auth commands
+  if (sub === 'list' || sub === 'ls') return _safeListCli(safe, opts);
+  if (sub === 'delete' || sub === 'rm') return _safeDeleteCli(safe, opts);
+  if (!sub) return _safeHelp();
+
+  // All other commands need auth
+  const authSdk = await _safeAuth();
+  if (!authSdk) return 1;
+
+  if (sub === 'set') return _safeSetCli(safe, authSdk, opts);
+  if (sub === 'get') return _safeGetCli(safe, authSdk, opts);
+  if (sub === 'push') return _safeCloudOp(safe, authSdk, 'push', opts);
+  if (sub === 'pull') return _safeCloudOp(safe, authSdk, 'pull', opts);
+
+  return _safeHelp();
+}
+
+async function _safeAuth() {
+  const result = await getPassword({ password: passwordArg, isAgentMode: !process.stdin.isTTY });
+  try {
+    return (await authenticate(result.password, { authUrl, apiUrl })).authSdk;
+  } catch (err) {
+    console.error(fmt.error(`Authentication failed: ${err.message}`));
+    return null;
+  }
+}
+
+async function _safeSetCli(safe, authSdk, opts) {
+  const name = positionals[2];
+  if (!name) { console.error(fmt.error('Usage: emblemai safe set <name> [value]')); return 1; }
+  let value = positionals[3];
+  if (value === undefined) value = await promptPassword(`  Enter value for "${name}": `);
+  try {
+    await safe.safeSet(name, value, authSdk, opts);
+    console.log(fmt.success(`Stored "${name}" in safe.`));
+    return 0;
+  } catch (err) { console.error(fmt.error(err.message)); return 1; }
+}
+
+async function _safeGetCli(safe, authSdk, opts) {
+  const name = positionals[2];
+  if (!name) { console.error(fmt.error('Usage: emblemai safe get <name>')); return 1; }
+  try {
+    const value = await safe.safeGet(name, authSdk, opts);
+    if (value === null) { console.error(fmt.error(`Secret "${name}" not found.`)); return 1; }
+    process.stdout.write(value);
+    if (process.stdout.isTTY) process.stdout.write('\n');
+    return 0;
+  } catch (err) { console.error(fmt.error(err.message)); return 1; }
+}
+
+function _safeListCli(safe, opts) {
+  const names = safe.safeList(opts);
+  if (names.length === 0) { console.log(chalk.dim('Safe is empty.')); return 0; }
+  console.log(chalk.bold.white('Safe'));
+  console.log(chalk.dim('\u2500'.repeat(40)));
+  for (const name of names) console.log(`  ${chalk.white(name)}`);
+  console.log(chalk.dim(`\n  ${names.length} secret${names.length === 1 ? '' : 's'}`));
+  return 0;
+}
+
+function _safeDeleteCli(safe, opts) {
+  const name = positionals[2];
+  if (!name) { console.error(fmt.error('Usage: emblemai safe delete <name>')); return 1; }
+  const deleted = safe.safeDelete(name, opts);
+  console.log(deleted ? fmt.success(`Deleted "${name}" from safe.`) : fmt.error(`Secret "${name}" not found.`));
+  return deleted ? 0 : 1;
+}
+
+async function _safeCloudOp(safe, authSdk, action, opts) {
+  const cloudOpts = { ...opts, apiUrl };
+  try {
+    if (action === 'push') {
+      const result = await safe.pushToCloud(authSdk, cloudOpts);
+      console.log(fmt.success(`Safe pushed to cloud (${result.count} secret${result.count === 1 ? '' : 's'}).`));
+    } else {
+      const result = await safe.pullFromCloud(authSdk, cloudOpts);
+      if (!result) {
+        console.log(chalk.yellow('No safe found in cloud for this account.'));
+      } else {
+        console.log(fmt.success(`Safe pulled from cloud (${result.count} secret${result.count === 1 ? '' : 's'}).`));
+      }
+    }
+    return 0;
+  } catch (err) { console.error(fmt.error(`${action} failed: ${err.message}`)); return 1; }
+}
+
+function _safeHelp() {
+  console.log(chalk.bold.white('Encrypted Safe'));
+  console.log(chalk.dim('\u2500'.repeat(40)));
+  console.log('');
+  console.log('  Store private keys, passwords, card numbers, and any secrets.');
+  console.log('  Encrypted client-side — the server never sees plaintext.');
+  console.log('');
+  console.log(`  ${chalk.cyan('emblemai safe set <name> [value]')}  Store a secret (prompts if value omitted)`);
+  console.log(`  ${chalk.cyan('emblemai safe get <name>')}          Retrieve a secret`);
+  console.log(`  ${chalk.cyan('emblemai safe list')}                List stored secret names`);
+  console.log(`  ${chalk.cyan('emblemai safe delete <name>')}       Delete a secret`);
+  console.log(`  ${chalk.cyan('emblemai safe push')}               Sync safe to cloud`);
+  console.log(`  ${chalk.cyan('emblemai safe pull')}               Pull safe from cloud`);
+  console.log('');
+  console.log(chalk.dim('  --profile <name> required when multiple profiles exist.'));
+  return 0;
 }
 
 function buildMessages(msgs, pluginManager) {
@@ -551,6 +676,18 @@ async function main() {
       process.exit(await handleProfileCliCommand(activeProfile));
     }
 
+    if (isSafeCliCommand) {
+      const safeSub = (positionals[1] || '').toLowerCase();
+      if (!safeSub) {
+        process.exit(_safeHelp());
+      }
+      if (hasMultipleProfiles() && !profileArg) {
+        console.error(fmt.error('Multiple profiles detected. Use --profile <name> with safe commands.'));
+        process.exit(1);
+      }
+      process.exit(await handleSafeCliCommand(activeProfile));
+    }
+
     // ── Restore auth backup ──────────────────────────────────────────────
     if (restoreAuthArg) {
       const backupPath = path.resolve(restoreAuthArg);
@@ -598,6 +735,7 @@ async function main() {
 
     // ── Authenticate ──────────────────────────────────────────────────────
     let authSdk;
+    // (password is resolved inside the if-block below, not stored on ctx)
 
     if (isAgentMode || isReset || passwordArg) {
       // Agent mode, reset, or explicit -p flag: password auth (unchanged)
@@ -644,6 +782,9 @@ async function main() {
         }
       }
     }
+    // Proactively refresh if the session is close to expiry
+    await tryAutoRefresh(authSdk, { authUrl, apiUrl });
+
     const vaultId = authSdk.getSession()?.user?.vaultId;
 
     // Migrate legacy single-file history to per-vault
@@ -726,6 +867,9 @@ async function main() {
       }
 
       await pluginManager.loadAll(pluginConfig, { authSdk, credentials: { secrets: pluginSecrets } });
+
+      // Ensure token is fresh before the single agent request
+      await tryAutoRefresh(authSdk, { authUrl, apiUrl });
 
       process.stdout.write(chalk.dim('Thinking'));
       const progressInterval = setInterval(() => process.stdout.write(chalk.dim('.')), 2000);
@@ -814,7 +958,7 @@ async function main() {
       completer: (line) => {
         const cmds = ['/help', '/profile', '/plugins', '/tools', '/auth', '/wallet',
           '/portfolio', '/model', '/models', '/stream', '/debug', '/history', '/payment',
-          '/secrets', '/glow', '/log', '/reset', '/exit', '/settings'];
+          '/mpp', '/x402', '/secrets', '/safe', '/glow', '/log', '/reset', '/exit', '/settings'];
         const hits = cmds.filter(c => c.startsWith(line));
         return [hits.length ? hits : cmds, line];
       },
@@ -836,6 +980,7 @@ async function main() {
 
     ctx = {
       client, settings, pluginManager, history, tui: null, authSdk, glow, saveHistory,
+      apiUrl,
       activeProfileName: defaultProfileName,
       profileName: activeProfile,
       switchProfile: async (name) => {
@@ -965,6 +1110,9 @@ async function main() {
         }
         if (result.handled) continue;
       }
+
+      // Refresh token if close to expiry before making an API call
+      await tryAutoRefresh(authSdk, { authUrl, apiUrl });
 
       // Build messages
       const msgs = settings.retainHistory ? [...history.messages] : [];

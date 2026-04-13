@@ -228,6 +228,7 @@ test('profile commands switch the live session profile', async () => {
   assert.match(joined, /Model:\s+OpenAI: GPT-4\.1 \(openai\/gpt-4\.1\)/);
   assert.match(joined, /Model:\s+Qwen: Qwen3\.6 Plus Preview \(free\) \(qwen\/qwen3\.6-plus-preview:free\)/);
   assert.match(joined, /This Session:\s+YES/);
+  assert.match(joined, /MPP State:\s+missing/);
   assert.doesNotMatch(joined, /Profile Drift:/);
   assert.match(joined, /Session Profile:\s+treasury/);
   assert.match(joined, /Default Profile:\s+treasury/);
@@ -313,11 +314,11 @@ test('model commands update the active model and show default choices', async ()
   assert.match(joined, /Anthropic: Claude Sonnet 4\.6/);
   assert.match(joined, /Search OpenRouter with \/models search <query>\./);
   assert.match(joined, /https:\/\/openrouter\.ai\/anthropic\/claude.*sonnet/);
-  assert.match(joined, /Current model:\s+Anthropic: Claude Sonnet 4\.6 \(anthropic\/claude-sonnet-4\.6\) \(default\)/);
-  assert.match(joined, /Model set to: anthropic\/claude-opus-4\.6 \(Anthropic: Claude Opus 4\.6\)/);
-  assert.match(joined, /Current model:\s+Anthropic: Claude Opus 4\.6 \(anthropic\/claude-opus-4\.6\)/);
-  assert.match(joined, /Model reset to default: anthropic\/claude-sonnet-4\.6/);
-  assert.match(joined, /Current model:\s+Anthropic: Claude Sonnet 4\.6 \(anthropic\/claude-sonnet-4\.6\) \(default\)/);
+  assert.match(joined, /Current model:\s+MoonshotAI: Kimi K2\.5 \(moonshotai\/kimi-k2\.5\) \(default\)/);
+  assert.match(joined, /Model set to: anthropic\/claude-sonnet-4\.6 \(Anthropic: Claude Sonnet 4\.6\)/);
+  assert.match(joined, /Current model:\s+Anthropic: Claude Sonnet 4\.6 \(anthropic\/claude-sonnet-4\.6\)/);
+  assert.match(joined, /Model reset to default: moonshotai\/kimi-k2\.5/);
+  assert.match(joined, /Current model:\s+MoonshotAI: Kimi K2\.5 \(moonshotai\/kimi-k2\.5\) \(default\)/);
 });
 
 test('model command resolves numeric selection from the last search results and shows its label', async () => {
@@ -396,6 +397,118 @@ test('model command can surface ambiguous exotic matches and then switch by numb
   assert.match(joined, /Current model:\s+.*DeepSeek.*\(.+\)/);
 });
 
+test('mpp command advertises scope and executes the MPP plugin', async () => {
+  const { ctx, outputs } = makeCtx({
+    pluginManager: {
+      plugins: new Map([
+        ['hustle-mpp', {
+          enabled: true,
+          plugin: {
+            executors: {
+              async mpp_call({ url, body, paymentMethod }) {
+                return {
+                  ok: true,
+                  status: 200,
+                  url,
+                  paymentMethod: paymentMethod || 'tempo',
+                  method: body ? 'POST' : 'GET',
+                  receipt: {
+                    method: paymentMethod || 'tempo',
+                    status: 'success',
+                    reference: '0xabc',
+                    timestamp: '2026-03-31T00:00:00.000Z',
+                  },
+                  data: body ? JSON.parse(body) : null,
+                };
+              },
+              async mpp_services() {
+                return {
+                  ok: true,
+                  directoryUrl: 'https://mpp.dev/api/services',
+                  count: 1,
+                  services: [
+                    {
+                      id: 'parallel',
+                      name: 'Parallel',
+                      serviceUrl: 'https://parallelmpp.dev',
+                      categories: ['ai', 'search'],
+                      paidEndpointCount: 3,
+                    },
+                  ],
+                };
+              },
+              async mpp_service_info({ id }) {
+                return {
+                  ok: true,
+                  service: {
+                    id,
+                    name: 'Parallel',
+                    serviceUrl: 'https://parallelmpp.dev',
+                    endpoints: [
+                      {
+                        method: 'POST',
+                        path: '/api/search',
+                        payment: {
+                          method: 'tempo',
+                          amount: '1000000',
+                        },
+                      },
+                    ],
+                  },
+                };
+              },
+              async mpp_state() {
+                return {
+                  ok: true,
+                  tempo: {
+                    channels: [
+                      {
+                        channelId: '0xchan',
+                        recipient: '0xpayee',
+                        currency: '0x20c0',
+                        cumulativeAmountRaw: '1000000',
+                      },
+                    ],
+                  },
+                };
+              },
+              async mpp_tempo_clear() {
+                return {
+                  ok: true,
+                  tempo: { channels: [] },
+                };
+              },
+            },
+          },
+        }],
+      ]),
+    },
+  });
+
+  await processCommand('/help', ctx);
+  await processCommand('/mpp', ctx);
+  await processCommand('/mpp services parallel', ctx);
+  await processCommand('/mpp service parallel', ctx);
+  await processCommand('/mpp state', ctx);
+  await processCommand('/mpp call https://parallelmpp.dev/api/search {"query":"agent payments"}', ctx);
+  await processCommand('/mpp state clear', ctx);
+
+  const joined = stripAnsi(outputs.join('\n---\n'));
+
+  assert.match(joined, /\/mpp\s+MPP client plugin — status and paid endpoint calls/);
+  assert.match(joined, /\/mpp services \[query\]\s+Browse public MPP services from the official directory/);
+  assert.match(joined, /MPP Client Plugin/);
+  assert.match(joined, /402 challenge → Authorization: Payment → Payment-Receipt/);
+  assert.match(joined, /Tempo crypto via/);
+  assert.match(joined, /mpp\.dev\/api\/services/);
+  assert.match(joined, /Parallel/);
+  assert.match(joined, /MPP Profile State/);
+  assert.match(joined, /cumulativeRaw/);
+  assert.match(joined, /parallelmpp\.dev\/api\/search/);
+  assert.match(joined, /"reference": "0xabc"/);
+  assert.match(joined, /Cleared persisted Tempo channel hints for the active profile\./);
+});
+
 test('agent mode requires --profile when more than one profile exists', () => {
   profile.createProfile('default');
   profile.createProfile('treasury');
@@ -460,4 +573,22 @@ test('deleteProfile can remove a noncurrent profile when active-profile is missi
   assert.equal(profile.profileExists('treasury'), false);
   assert.equal(profile.profileExists('default'), true);
   assert.equal(profile.profileExists('ops'), true);
+});
+
+test('needsRefresh returns true when session is within the refresh buffer', () => {
+  const fresh = { expiresAt: Date.now() + 10 * 60 * 1000 }; // 10 min out
+  const expiring = { expiresAt: Date.now() + 2 * 60 * 1000 }; // 2 min out
+  const expired = { expiresAt: Date.now() - 1000 };
+
+  assert.equal(sessionStore.needsRefresh(fresh), false);
+  assert.equal(sessionStore.needsRefresh(expiring), true);
+  assert.equal(sessionStore.needsRefresh(expired), true);
+});
+
+test('isSessionExpired returns true only when past expiresAt', () => {
+  const valid = { expiresAt: Date.now() + 60_000 };
+  const expired = { expiresAt: Date.now() - 1000 };
+
+  assert.equal(sessionStore.isSessionExpired(valid), false);
+  assert.equal(sessionStore.isSessionExpired(expired), true);
 });
