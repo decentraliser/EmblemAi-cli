@@ -12,6 +12,18 @@ Each agent gets a deterministic wallet derived from a password. No seed phrases,
 npm install -g @emblemvault/agentwallet
 ```
 
+## Use with MCP clients (Claude Code, Cursor, Windsurf, …)
+
+You do not need the CLI to call EmblemAI tools from an MCP-compatible client. Install the hosted EmblemAI MCP server directly:
+
+```bash
+claude mcp add --transport http EmblemAI https://emblemvault.ai/api/mcp
+```
+
+The first call opens the hosted OAuth flow in your browser. No API key to paste. API key and JWT bearer auth are also supported — see https://emblemvault.ai/docs/mcp for the full install matrix (Claude Desktop bridge, GitHub Copilot CLI, Gemini CLI).
+
+The CLI below stays the right choice for agent-mode automation and profile-aware local development.
+
 ## Development
 
 Use TypeScript's checker against the JavaScript source and JSDoc annotations:
