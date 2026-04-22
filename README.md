@@ -1,14 +1,28 @@
 # @emblemvault/agentwallet
 
-The CLI for **EmblemVault Agent Wallet** -- giving AI agents their own crypto wallets across 7 blockchains. Designed for use in [OpenClaw](https://openclaw.ai), autonomous agent frameworks, and any system where AI agents need to hold, send, and manage crypto independently.
+The CLI for **EmblemAI Agent Wallet** — open-source crypto infrastructure for both AI agents and developers. One install gives an agent (or a human at the terminal) a deterministic wallet across 7 blockchains and access to **200+ trading tools** covering swaps, conditional orders, DeFi positions, NFT operations, cross-chain bridges, and market intelligence. x402 payment rails for per-call agent-to-agent commerce, A2A (Agent-to-Agent) protocol support, and a built-in MCP server for any MCP-compatible client.
 
-Each agent gets a deterministic wallet derived from a password. No seed phrases, no manual key management. The agent authenticates once and gets addresses on Solana, Ethereum, Base, BSC, Polygon, Hedera, and Bitcoin -- ready to trade, hold, and transact.
+Designed for use with Claude Code, Codex CLI, Copilot CLI, Gemini CLI, [OpenClaw](https://openclaw.ai), and any agent framework that can shell out to a binary or speak MCP.
+
+Each agent gets a deterministic wallet derived from a password. No seed phrases, no manual key management. The agent authenticates once and gets addresses on Solana, Ethereum, Base, BSC, Polygon, Hedera, and Bitcoin — ready to trade, hold, and transact.
 
 ## Install
 
 ```bash
 npm install -g @emblemvault/agentwallet
 ```
+
+## Use with MCP clients (Claude Code, Cursor, Windsurf, …)
+
+You do not need the CLI to call EmblemAI tools from an MCP-compatible client. Install the hosted EmblemAI MCP server directly:
+
+```bash
+claude mcp add --transport http EmblemAI https://emblemvault.ai/api/mcp
+```
+
+The first call opens the hosted OAuth flow in your browser. No API key to paste. API key and JWT bearer auth are also supported — see https://emblemvault.ai/docs/mcp for the full install matrix (Claude Desktop bridge, GitHub Copilot CLI, Gemini CLI).
+
+The CLI below stays the right choice for agent-mode automation and profile-aware local development.
 
 ## Development
 
@@ -478,6 +492,10 @@ Solana, Ethereum, Base, BSC, Polygon, Hedera, Bitcoin
 
 ## Links
 
-- [EmblemVault](https://emblemvault.dev)
-- [EmblemAI](https://emblemvault.ai)
-- [GitHub](https://github.com/EmblemCompany/EmblemAi-AgentWallet)
+- **Website**: [emblemvault.ai](https://emblemvault.ai)
+- **Documentation**: [emblemvault.dev](https://emblemvault.dev)
+- **NPM**: [@emblemvault/agentwallet](https://www.npmjs.com/package/@emblemvault/agentwallet)
+- **GitHub (this CLI)**: [EmblemCompany/EmblemAi-cli](https://github.com/EmblemCompany/EmblemAi-cli)
+- **Recent posts on the EmblemAI blog**:
+  - [How to Give Your AI Agent a Multi-Chain Crypto Wallet in 5 Minutes](https://emblemvault.ai/blog/how-to-give-your-ai-agent-a-multi-chain-crypto-wallet)
+  - [x402: How AI Agents Pay for API Calls with Crypto Micropayments](https://emblemvault.ai/blog/x402-how-ai-agents-pay-for-api-calls-with-crypto-micropayments)
