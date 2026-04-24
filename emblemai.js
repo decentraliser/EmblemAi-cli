@@ -24,7 +24,14 @@ import path from 'path';
 import os from 'os';
 import readline from 'readline';
 import chalk from 'chalk';
-import { loadSessionPreferences, saveSession, saveSessionPreferences } from './src/session-store.js';
+import {
+  isSessionExpired,
+  loadSession,
+  loadSessionPreferences,
+  needsRefresh,
+  saveSession,
+  saveSessionPreferences,
+} from './src/session-store.js';
 import { processCommand } from './src/commands.js';
 import { PluginManager } from './src/plugins/loader.js';
 import { createModelSelection, getDefaultModelChoice, getDefaultModelChoices } from './src/models.js';
@@ -189,6 +196,7 @@ function getPositionals(argv) {
 const positionals = getPositionals(args);
 const isProfileCliCommand = positionals[0] === 'profile';
 const isSafeCliCommand = positionals[0] === 'safe';
+const isClawLoginCliCommand = positionals[0] === 'claw-login';
 
 // Endpoint overrides
 const hustleApiUrl = hustleUrlArg || process.env.HUSTLE_API_URL || undefined;
@@ -505,6 +513,86 @@ async function _safeCloudOp(safe, authSdk, action, opts) {
   } catch (err) { console.error(fmt.error(`${action} failed: ${err.message}`)); return 1; }
 }
 
+// ── Claw OS login URL ──────────────────────────────────────────────────────
+
+const DEFAULT_CLAW_HOST = 'http://localhost:3033';
+
+async function handleClawLoginCliCommand(activeProfile) {
+  const sub = (positionals[1] || '').toLowerCase();
+  if (sub === 'help' || sub === '--help' || sub === '-h') {
+    return _clawLoginHelp();
+  }
+
+  const clawHost = (getArg(['--claw-host']) || process.env.CLAW_OS_HOST || DEFAULT_CLAW_HOST).replace(/\/+$/, '');
+
+  let session = loadSession();
+
+  if (session && isSessionExpired(session)) {
+    session = null;
+  }
+
+  if (!session || needsRefresh(session)) {
+    const refreshed = await _refreshSessionForClawLogin(session);
+    if (refreshed) session = refreshed;
+  }
+
+  if (!session?.authToken) {
+    const profileLabel = activeProfile || '<name>';
+    console.error(fmt.error(`No valid session for profile "${profileLabel}".`));
+    console.error(chalk.dim(`  Mint one with: emblemai --profile ${profileLabel} --agent -m "session refresh"`));
+    return 1;
+  }
+
+  const url = `${clawHost}/?authToken=${encodeURIComponent(session.authToken)}`;
+  process.stdout.write(url);
+  if (process.stdout.isTTY) process.stdout.write('\n');
+  return 0;
+}
+
+async function _refreshSessionForClawLogin(existingSession) {
+  try {
+    if (passwordArg) {
+      const result = await authenticate(passwordArg, { authUrl, apiUrl });
+      const next = result.authSdk.getSession();
+      if (next?.authToken) {
+        saveSession(next);
+        return next;
+      }
+    }
+
+    const storedPassword = getCredential('EMBLEM_PASSWORD');
+    if (storedPassword) {
+      const result = await authenticate(storedPassword, { authUrl, apiUrl });
+      const next = result.authSdk.getSession();
+      if (next?.authToken) {
+        saveSession(next);
+        return next;
+      }
+    }
+  } catch {
+    // Fall through — caller decides based on existingSession validity.
+  }
+
+  return existingSession ?? null;
+}
+
+function _clawLoginHelp() {
+  console.log(chalk.bold.white('Claw OS login URL'));
+  console.log(chalk.dim('\u2500'.repeat(40)));
+  console.log('');
+  console.log('  Print a one-shot URL that hydrates the Claw OS browser UI');
+  console.log('  with the active profile\u2019s JWT. Paste it into a browser, the');
+  console.log('  frontend stashes the session in localStorage, and redirects.');
+  console.log('');
+  console.log(`  ${chalk.cyan('emblemai claw-login')}                         Use the active profile`);
+  console.log(`  ${chalk.cyan('emblemai claw-login --profile <name>')}        Use a specific profile`);
+  console.log(`  ${chalk.cyan('emblemai claw-login --claw-host <url>')}       Override host (default ${DEFAULT_CLAW_HOST})`);
+  console.log('');
+  console.log(chalk.dim('  Session is auto-refreshed if close to expiry when credentials are cached.'));
+  console.log(chalk.dim(`  CLAW_OS_HOST env var overrides the default host.`));
+  return 0;
+}
+
 function _safeHelp() {
   console.log(chalk.bold.white('Encrypted Safe'));
   console.log(chalk.dim('\u2500'.repeat(40)));
@@ -686,6 +774,16 @@ async function main() {
         process.exit(1);
       }
       process.exit(await handleSafeCliCommand(activeProfile));
+    }
+
+    if (isClawLoginCliCommand) {
+      const clawSub = (positionals[1] || '').toLowerCase();
+      const isHelp = clawSub === 'help' || clawSub === '--help' || clawSub === '-h';
+      if (!isHelp && hasMultipleProfiles() && !profileArg) {
+        console.error(fmt.error('Multiple profiles detected. Use --profile <name> with claw-login.'));
+        process.exit(1);
+      }
+      process.exit(await handleClawLoginCliCommand(activeProfile));
     }
 
     // ── Restore auth backup ──────────────────────────────────────────────
